@@ -23,6 +23,8 @@ class VisitorDatabase {
   private receptionists: ReceptionDesk[] = [];
   public isConnectedToMongo: boolean = false;
   public mongoDbUri: string = '';
+  public mongoDatabaseName: string = '';
+  public mongoError: string | null = null;
 
   constructor() {
     this.loadLocalData();
@@ -34,17 +36,139 @@ class VisitorDatabase {
   private async initMongoConnection(): Promise<void> {
     const uri = process.env.MONGODB_URI;
     if (!uri) {
+      this.mongoError = 'MONGODB_URI is not set. Data is currently in temporary mode. Please connect your live MongoDB URI to store data directly in MongoDB.';
+      console.log('[VisitorPass Database] MONGODB_URI not found.');
       return;
     }
 
     try {
-      this.mongoDbUri = uri.replace(/\/\/([^:]+):([^@]+)@/, '//$1:****@');
-      await mongoose.connect(uri);
-      this.isConnectedToMongo = true;
-      console.log(`Connected to MongoDB successfully: ${this.mongoDbUri}`);
+      await this.connectMongo(uri, process.env.MONGODB_DB_NAME, false);
     } catch (err: any) {
-      console.error('Failed to connect to MongoDB, using local file storage:', err.message);
+      console.error('[VisitorPass Database] Initial MongoDB connection failed:', err.message);
+    }
+  }
+
+  public async connectMongo(
+    rawUri: string,
+    customDbName?: string,
+    persistToEnv: boolean = true
+  ): Promise<{
+    success: boolean;
+    databaseName: string;
+    collectionName: string;
+    mongoVisitorCount: number;
+    maskedUri: string;
+  }> {
+    const uri = rawUri.trim();
+    if (!uri.startsWith('mongodb://') && !uri.startsWith('mongodb+srv://')) {
+      throw new Error('Invalid MongoDB connection string. Must start with mongodb:// or mongodb+srv://');
+    }
+
+    try {
+      if (mongoose.connection.readyState !== 0) {
+        await mongoose.disconnect();
+      }
+
+      const masked = uri.replace(/\/\/([^:]+):([^@]+)@/, '//$1:****@');
+      this.mongoDbUri = masked;
+
+      const dbName = customDbName?.trim() || process.env.MONGODB_DB_NAME || undefined;
+      await mongoose.connect(uri, {
+        serverSelectionTimeoutMS: 10000,
+        ...(dbName ? { dbName } : {}),
+      });
+
+      // Verify connection with ping
+      await mongoose.connection.db?.admin().ping();
+
+      this.isConnectedToMongo = true;
+      this.mongoDatabaseName = mongoose.connection.name || (mongoose.connection.db as any)?.databaseName || 'test';
+      this.mongoError = null;
+
+      if (persistToEnv) {
+        this.saveEnv('MONGODB_URI', uri);
+        if (dbName) {
+          this.saveEnv('MONGODB_DB_NAME', dbName);
+        }
+      }
+
+      console.log(`[VisitorPass Database] LIVE MongoDB active: database="${this.mongoDatabaseName}", uri="${masked}"`);
+
+      // Ensure receptionist desk and migrate existing records
+      await this.ensurePrimaryReceptionDesk();
+      await this.autoMigrateLocalDataIfEmpty();
+
+      const count = await VisitorModel.countDocuments();
+
+      return {
+        success: true,
+        databaseName: this.mongoDatabaseName,
+        collectionName: 'visitors',
+        mongoVisitorCount: count,
+        maskedUri: masked,
+      };
+    } catch (err: any) {
       this.isConnectedToMongo = false;
+      this.mongoError = err.message || 'Failed to connect to MongoDB';
+      console.error('[VisitorPass Database] MongoDB connect error:', err.message);
+      throw new Error(`MongoDB connection failed: ${err.message}`);
+    }
+  }
+
+  public async disconnectMongo(): Promise<void> {
+    if (mongoose.connection.readyState !== 0) {
+      await mongoose.disconnect();
+    }
+    this.isConnectedToMongo = false;
+    this.mongoDatabaseName = '';
+    this.mongoError = 'MongoDB disconnected by user request.';
+  }
+
+  private saveEnv(key: string, value: string): void {
+    try {
+      const envPath = path.resolve(process.cwd(), '.env');
+      let content = '';
+      if (fs.existsSync(envPath)) {
+        content = fs.readFileSync(envPath, 'utf-8');
+      }
+      const regex = new RegExp(`^${key}=.*$`, 'm');
+      const newLine = `${key}="${value}"`;
+      if (regex.test(content)) {
+        content = content.replace(regex, newLine);
+      } else {
+        content = content.trim() ? `${content.trim()}\n${newLine}\n` : `${newLine}\n`;
+      }
+      fs.writeFileSync(envPath, content, 'utf-8');
+      process.env[key] = value;
+    } catch (err) {
+      console.error('Error saving .env file:', err);
+    }
+  }
+
+  private async autoMigrateLocalDataIfEmpty(): Promise<void> {
+    try {
+      if (!this.isConnectedToMongo || this.visitors.length === 0) return;
+      const count = await VisitorModel.countDocuments();
+      if (count === 0) {
+        console.log(`[VisitorPass Database] MongoDB collection "visitors" is empty. Auto-migrating ${this.visitors.length} existing local records...`);
+        for (const v of this.visitors) {
+          await VisitorModel.create({
+            name: v.name,
+            mobileNumber: v.mobileNumber,
+            companyOrCollege: v.companyOrCollege,
+            personToMeet: v.personToMeet,
+            purposeOfVisit: v.purposeOfVisit,
+            dateTime: v.dateTime || new Date().toISOString(),
+            status: v.status || 'CHECKED_IN',
+            checkInTime: v.checkInTime || v.dateTime || new Date().toISOString(),
+            checkOutTime: v.checkOutTime || null,
+            registeredByDesk: v.registeredByDesk || 'admin',
+          });
+        }
+        console.log(`[VisitorPass Database] Auto-migration successfully stored ${this.visitors.length} visitors in MongoDB!`);
+      }
+    } catch (err: any) {
+      console.error('[VisitorPass Database] Auto-migration error:', err.message);
     }
   }
 
@@ -54,8 +178,17 @@ class VisitorDatabase {
     try {
       if (fs.existsSync(DATA_FILE)) {
         const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-        this.visitors = JSON.parse(raw);
-        if (!Array.isArray(this.visitors)) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          // Normalize check-in / check-out status for existing records
+          this.visitors = parsed.map((v: any) => ({
+            ...v,
+            status: v.status || (v.checkOutTime ? 'CHECKED_OUT' : 'CHECKED_IN'),
+            checkInTime: v.checkInTime || v.dateTime || new Date().toISOString(),
+            checkOutTime: v.checkOutTime || null,
+          }));
+          this.saveVisitors();
+        } else {
           this.visitors = [];
           this.saveVisitors();
         }
@@ -275,16 +408,24 @@ class VisitorDatabase {
     return false;
   }
 
-  // --- VISITORS MANAGEMENT ---
+  // --- VISITORS MANAGEMENT & CHECK-IN / CHECK-OUT ---
 
-  public async getAll(search?: string): Promise<Visitor[]> {
+  public async getAll(search?: string, statusFilter?: string): Promise<Visitor[]> {
     if (this.isConnectedToMongo) {
       const query: any = {};
       if (search && search.trim()) {
         const regex = new RegExp(search.trim(), 'i');
-        query.$or = [{ name: regex }, { mobileNumber: regex }];
+        query.$or = [
+          { name: regex },
+          { mobileNumber: regex },
+          { companyOrCollege: regex },
+          { personToMeet: regex },
+        ];
       }
-      const docs = await VisitorModel.find(query).sort({ dateTime: -1 });
+      if (statusFilter && statusFilter !== 'ALL') {
+        query.status = statusFilter;
+      }
+      const docs = await VisitorModel.find(query).sort({ checkInTime: -1 });
       return docs.map((d) => d.toJSON() as Visitor);
     }
 
@@ -294,11 +435,21 @@ class VisitorDatabase {
       results = results.filter(
         (v) =>
           v.name.toLowerCase().includes(q) ||
-          v.mobileNumber.toLowerCase().includes(q)
+          v.mobileNumber.toLowerCase().includes(q) ||
+          v.companyOrCollege.toLowerCase().includes(q) ||
+          v.personToMeet.toLowerCase().includes(q)
       );
     }
 
-    results.sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime());
+    if (statusFilter && statusFilter !== 'ALL') {
+      results = results.filter((v) => v.status === statusFilter);
+    }
+
+    results.sort(
+      (a, b) =>
+        new Date(b.checkInTime || b.dateTime).getTime() -
+        new Date(a.checkInTime || a.dateTime).getTime()
+    );
     return results;
   }
 
@@ -313,6 +464,9 @@ class VisitorDatabase {
   public async create(data: VisitorFormData): Promise<Visitor> {
     const now = new Date().toISOString();
     const dateTime = data.dateTime || now;
+    const checkInTime = data.checkInTime || dateTime;
+    const status = data.status || 'CHECKED_IN';
+    const checkOutTime = data.checkOutTime || null;
 
     if (this.isConnectedToMongo) {
       const doc = await VisitorModel.create({
@@ -322,6 +476,9 @@ class VisitorDatabase {
         personToMeet: data.personToMeet.trim(),
         purposeOfVisit: data.purposeOfVisit.trim(),
         dateTime,
+        status,
+        checkInTime,
+        checkOutTime,
         registeredByDesk: data.registeredByDesk || 'admin',
       });
       return doc.toJSON() as Visitor;
@@ -335,12 +492,88 @@ class VisitorDatabase {
       personToMeet: data.personToMeet.trim(),
       purposeOfVisit: data.purposeOfVisit.trim(),
       dateTime,
+      status,
+      checkInTime,
+      checkOutTime,
       registeredByDesk: data.registeredByDesk || 'admin',
+      createdAt: now,
     };
 
     this.visitors.unshift(newVisitor);
     this.saveVisitors();
     return newVisitor;
+  }
+
+  public async checkOut(
+    id: string,
+    deskId?: string,
+    checkOutTime?: string
+  ): Promise<Visitor | null> {
+    const outTime = checkOutTime || new Date().toISOString();
+
+    if (this.isConnectedToMongo) {
+      const doc = await VisitorModel.findByIdAndUpdate(
+        id,
+        {
+          status: 'CHECKED_OUT',
+          checkOutTime: outTime,
+          ...(deskId && { checkedOutByDesk: deskId }),
+        },
+        { new: true }
+      );
+      return doc ? (doc.toJSON() as Visitor) : null;
+    }
+
+    const idx = this.visitors.findIndex((v) => v.id === id);
+    if (idx === -1) return null;
+
+    this.visitors[idx] = {
+      ...this.visitors[idx],
+      status: 'CHECKED_OUT',
+      checkOutTime: outTime,
+      ...(deskId && { checkedOutByDesk: deskId }),
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.saveVisitors();
+    return this.visitors[idx];
+  }
+
+  public async checkIn(
+    id: string,
+    deskId?: string,
+    checkInTime?: string
+  ): Promise<Visitor | null> {
+    const inTime = checkInTime || new Date().toISOString();
+
+    if (this.isConnectedToMongo) {
+      const doc = await VisitorModel.findByIdAndUpdate(
+        id,
+        {
+          status: 'CHECKED_IN',
+          checkInTime: inTime,
+          checkOutTime: null,
+          ...(deskId && { registeredByDesk: deskId }),
+        },
+        { new: true }
+      );
+      return doc ? (doc.toJSON() as Visitor) : null;
+    }
+
+    const idx = this.visitors.findIndex((v) => v.id === id);
+    if (idx === -1) return null;
+
+    this.visitors[idx] = {
+      ...this.visitors[idx],
+      status: 'CHECKED_IN',
+      checkInTime: inTime,
+      checkOutTime: null,
+      ...(deskId && { registeredByDesk: deskId }),
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.saveVisitors();
+    return this.visitors[idx];
   }
 
   public async update(id: string, data: Partial<VisitorFormData>): Promise<Visitor | null> {
@@ -354,6 +587,9 @@ class VisitorDatabase {
           ...(data.personToMeet && { personToMeet: data.personToMeet.trim() }),
           ...(data.purposeOfVisit && { purposeOfVisit: data.purposeOfVisit.trim() }),
           ...(data.dateTime && { dateTime: data.dateTime }),
+          ...(data.status && { status: data.status }),
+          ...(data.checkInTime && { checkInTime: data.checkInTime }),
+          ...(data.checkOutTime !== undefined && { checkOutTime: data.checkOutTime }),
         },
         { new: true }
       );
@@ -372,7 +608,10 @@ class VisitorDatabase {
       ...(data.personToMeet && { personToMeet: data.personToMeet.trim() }),
       ...(data.purposeOfVisit && { purposeOfVisit: data.purposeOfVisit.trim() }),
       ...(data.dateTime && { dateTime: data.dateTime }),
-      id: existing.id,
+      ...(data.status && { status: data.status }),
+      ...(data.checkInTime && { checkInTime: data.checkInTime }),
+      ...(data.checkOutTime !== undefined && { checkOutTime: data.checkOutTime }),
+      updatedAt: new Date().toISOString(),
     };
 
     this.visitors[idx] = updated;
@@ -398,12 +637,91 @@ class VisitorDatabase {
   public async getStats(): Promise<VisitorStats> {
     const allVisitors = await this.getAll();
     const todayStr = new Date().toISOString().slice(0, 10);
-    const todayCount = allVisitors.filter((v) => v.dateTime.slice(0, 10) === todayStr).length;
+
+    const todayCheckIns = allVisitors.filter((v) => {
+      const t = v.checkInTime || v.dateTime;
+      return t && t.slice(0, 10) === todayStr;
+    }).length;
+
+    const currentlyInside = allVisitors.filter((v) => v.status === 'CHECKED_IN').length;
+
+    const checkedOutToday = allVisitors.filter((v) => {
+      return v.status === 'CHECKED_OUT' && v.checkOutTime && v.checkOutTime.slice(0, 10) === todayStr;
+    }).length;
 
     return {
-      todayTotal: todayCount,
+      todayTotal: todayCheckIns,
       totalVisitors: allVisitors.length,
+      currentlyInside,
+      checkedOutToday,
     };
+  }
+
+  public async getDbStatus(): Promise<{
+    isConnected: boolean;
+    storageType: string;
+    databaseName: string | null;
+    collectionName: string;
+    maskedUri: string | null;
+    mongoVisitorCount: number;
+    localVisitorCount: number;
+    error: string | null;
+  }> {
+    let mongoCount = 0;
+    let dbName: string | null = null;
+    if (this.isConnectedToMongo) {
+      try {
+        mongoCount = await VisitorModel.countDocuments();
+        dbName = this.mongoDatabaseName || mongoose.connection.name || (mongoose.connection.db as any)?.databaseName || null;
+      } catch {
+        // ignore
+      }
+    }
+
+    return {
+      isConnected: this.isConnectedToMongo,
+      storageType: this.isConnectedToMongo ? 'MongoDB' : 'Local File Storage (data/visitors.json)',
+      databaseName: dbName,
+      collectionName: 'visitors',
+      maskedUri: this.mongoDbUri || null,
+      mongoVisitorCount: mongoCount,
+      localVisitorCount: this.visitors.length,
+      error: this.mongoError || null,
+    };
+  }
+
+  public async migrateLocalVisitorsToMongo(): Promise<{ migrated: number; total: number }> {
+    if (!this.isConnectedToMongo) {
+      throw new Error(
+        this.mongoError || 'MongoDB is not connected. Please verify your MONGODB_URI configuration.'
+      );
+    }
+
+    let migrated = 0;
+    for (const v of this.visitors) {
+      const exists = await VisitorModel.findOne({
+        mobileNumber: v.mobileNumber,
+        name: v.name,
+      });
+
+      if (!exists) {
+        await VisitorModel.create({
+          name: v.name,
+          mobileNumber: v.mobileNumber,
+          companyOrCollege: v.companyOrCollege,
+          personToMeet: v.personToMeet,
+          purposeOfVisit: v.purposeOfVisit,
+          dateTime: v.dateTime || new Date().toISOString(),
+          status: v.status || 'CHECKED_IN',
+          checkInTime: v.checkInTime || v.dateTime || new Date().toISOString(),
+          checkOutTime: v.checkOutTime || null,
+          registeredByDesk: v.registeredByDesk || 'admin',
+        });
+        migrated++;
+      }
+    }
+
+    return { migrated, total: this.visitors.length };
   }
 }
 

@@ -1,16 +1,27 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Visitor, VisitorFormData, VisitorStats, ReceptionUser } from './types/index.ts';
+import {
+  Visitor,
+  VisitorFormData,
+  VisitorStats,
+  VisitorStatus,
+  ReceptionUser,
+  DbStatus,
+} from './types/index.ts';
 import { VisitorForm } from './components/VisitorForm.tsx';
 import { VisitorTable } from './components/VisitorTable.tsx';
 import { ReceptionLogin } from './components/ReceptionLogin.tsx';
 import { ManageDesksModal } from './components/ManageDesksModal.tsx';
+import { DatabaseStatusModal } from './components/DatabaseStatusModal.tsx';
 import {
   getVisitors,
   getVisitorStats,
   createVisitor,
   updateVisitor,
   deleteVisitor,
+  checkOutVisitor,
+  checkInVisitor,
   getExportCsvUrl,
+  getDbStatus,
 } from './services/api.ts';
 
 export default function App() {
@@ -24,12 +35,21 @@ export default function App() {
   });
 
   const [visitors, setVisitors] = useState<Visitor[]>([]);
-  const [stats, setStats] = useState<VisitorStats>({ todayTotal: 0, totalVisitors: 0 });
+  const [stats, setStats] = useState<VisitorStats>({
+    todayTotal: 0,
+    totalVisitors: 0,
+    currentlyInside: 0,
+    checkedOutToday: 0,
+  });
+  const [dbStatus, setDbStatus] = useState<DbStatus | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | VisitorStatus>('ALL');
   const [loading, setLoading] = useState<boolean>(true);
   const [submitting, setSubmitting] = useState<boolean>(false);
+  const [checkingId, setCheckingId] = useState<string | null>(null);
   const [editingVisitor, setEditingVisitor] = useState<Visitor | null>(null);
   const [showDesksModal, setShowDesksModal] = useState<boolean>(false);
+  const [showDbModal, setShowDbModal] = useState<boolean>(false);
 
   // Simple alert message for feedback
   const [alert, setAlert] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -58,19 +78,25 @@ export default function App() {
     if (!currentUser) return;
     try {
       setLoading(true);
-      const [visitorsList, statsData] = await Promise.all([
-        getVisitors(searchQuery),
+      const [visitorsList, statsData, dbStatusData] = await Promise.all([
+        getVisitors(searchQuery, statusFilter),
         getVisitorStats(),
+        getDbStatus().catch(() => null),
       ]);
       setVisitors(visitorsList);
       setStats(statsData);
+      if (dbStatusData) setDbStatus(dbStatusData);
     } catch (err: any) {
       console.error('Fetch error:', err);
       showAlert('Unable to reach server', 'error');
     } finally {
       setLoading(false);
     }
-  }, [searchQuery, currentUser]);
+  }, [searchQuery, statusFilter, currentUser]);
+
+  useEffect(() => {
+    getDbStatus().then(setDbStatus).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (currentUser) {
@@ -80,6 +106,38 @@ export default function App() {
       return () => clearTimeout(delayTimer);
     }
   }, [fetchData, currentUser]);
+
+  // Handle Check-Out
+  const handleCheckOut = async (visitor: Visitor) => {
+    try {
+      setCheckingId(visitor.id);
+      const updated = await checkOutVisitor(visitor.id, currentUser?.deskId);
+      setVisitors((prev) => prev.map((v) => (v.id === visitor.id ? updated : v)));
+      const newStats = await getVisitorStats();
+      setStats(newStats);
+      showAlert(`Visitor "${visitor.name}" checked out successfully`);
+    } catch (err: any) {
+      showAlert(err.message || 'Failed to check out visitor', 'error');
+    } finally {
+      setCheckingId(null);
+    }
+  };
+
+  // Handle Re-Check-In
+  const handleCheckIn = async (visitor: Visitor) => {
+    try {
+      setCheckingId(visitor.id);
+      const updated = await checkInVisitor(visitor.id, currentUser?.deskId);
+      setVisitors((prev) => prev.map((v) => (v.id === visitor.id ? updated : v)));
+      const newStats = await getVisitorStats();
+      setStats(newStats);
+      showAlert(`Visitor "${visitor.name}" re-checked in successfully`);
+    } catch (err: any) {
+      showAlert(err.message || 'Failed to check in visitor', 'error');
+    } finally {
+      setCheckingId(null);
+    }
+  };
 
   // Handle Create or Update
   const handleSubmitForm = async (formData: VisitorFormData, idToEdit?: string) => {
@@ -96,9 +154,10 @@ export default function App() {
         const created = await createVisitor({
           ...formData,
           registeredByDesk: currentUser?.deskId || 'admin',
+          status: 'CHECKED_IN',
         });
         setVisitors((prev) => [created, ...prev]);
-        showAlert(`Registered visitor "${created.name}"`);
+        showAlert(`Checked in visitor "${created.name}"`);
       }
       // Refresh dashboard stats
       const newStats = await getVisitorStats();
@@ -128,7 +187,7 @@ export default function App() {
 
   // Handle CSV Export
   const handleExportCsv = () => {
-    const url = getExportCsvUrl(searchQuery);
+    const url = getExportCsvUrl(searchQuery, statusFilter);
     const link = document.createElement('a');
     link.href = url;
     link.setAttribute('download', `visitor-log-${new Date().toISOString().slice(0, 10)}.csv`);
@@ -170,6 +229,31 @@ export default function App() {
           </div>
 
           <div className="text-xs text-slate-300 flex flex-wrap items-center gap-2.5">
+            {/* Database & Storage Status Button */}
+            <button
+              type="button"
+              onClick={() => setShowDbModal(true)}
+              className={`text-xs px-2.5 py-1 rounded transition cursor-pointer font-medium flex items-center gap-1.5 border ${
+                dbStatus?.isConnected
+                  ? 'bg-emerald-950/80 text-emerald-300 border-emerald-600/70 hover:bg-emerald-900'
+                  : 'bg-amber-950/80 text-amber-300 border-amber-600/70 hover:bg-amber-900'
+              }`}
+              title="Click to view live MongoDB connection details or connect MongoDB"
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  dbStatus?.isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
+                }`}
+              ></span>
+              <span>
+                {dbStatus?.isConnected
+                  ? `Live MongoDB: ${dbStatus.databaseName || 'visitor_db'} (${dbStatus.mongoVisitorCount})`
+                  : 'MongoDB Not Connected (Click to Connect)'}
+              </span>
+            </button>
+
+            <span className="text-slate-600 hidden sm:inline">|</span>
+
             {/* Manage Multiple Desks Button */}
             <button
               type="button"
@@ -223,22 +307,97 @@ export default function App() {
           </div>
         )}
 
-        {/* Bonus Feature: Dashboard showing today's total visitors */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {/* Today's Total Visitors */}
+        {/* Live MongoDB Connection Banner */}
+        {dbStatus?.isConnected ? (
+          <div className="bg-emerald-50 border border-emerald-300 rounded px-4 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-emerald-900 shadow-2xs">
+            <div className="flex items-center gap-2.5">
+              <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              <div>
+                <strong>LIVE MONGODB ACTIVE:</strong> All records are stored directly in live MongoDB database{' '}
+                <span className="font-mono font-bold bg-white px-1.5 py-0.5 rounded border border-emerald-200">
+                  {dbStatus.databaseName || 'visitor_db'}
+                </span>{' '}
+                &gt; collection{' '}
+                <span className="font-mono font-bold bg-white px-1.5 py-0.5 rounded border border-emerald-200">
+                  visitors
+                </span>{' '}
+                ({dbStatus.mongoVisitorCount} documents).
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowDbModal(true)}
+              className="text-xs font-bold text-emerald-800 hover:text-emerald-950 underline cursor-pointer whitespace-nowrap"
+            >
+              MongoDB Settings &amp; Info ↗
+            </button>
+          </div>
+        ) : (
+          <div className="bg-amber-50 border-2 border-amber-300 rounded px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950 shadow-2xs">
+            <div className="flex items-center gap-2.5">
+              <span className="h-3 w-3 rounded-full bg-amber-500"></span>
+              <div>
+                <strong>STORE ONLY IN MONGODB LIVE DATA:</strong> MongoDB is not connected yet. Connect your MongoDB Atlas connection string to save all visitor logs directly to live MongoDB.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowDbModal(true)}
+              className="px-3.5 py-1.5 bg-amber-700 hover:bg-amber-800 text-white rounded font-bold text-xs cursor-pointer whitespace-nowrap shadow-xs"
+            >
+              Connect Live MongoDB ↗
+            </button>
+          </div>
+        )}
+
+        {/* Check-In / Check-Out Metrics Dashboard */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Currently Inside Premises (Key Feature) */}
+          <div className="bg-white border-2 border-emerald-500/80 rounded p-4 shadow-xs relative overflow-hidden">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider">
+                Currently Inside
+              </p>
+              <span className="flex h-2.5 w-2.5 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+              </span>
+            </div>
+            <p className="text-3xl font-extrabold text-emerald-900 mt-1">
+              {stats.currentlyInside}
+            </p>
+            <p className="text-xs text-slate-500 mt-1">
+              Active visitors inside facility now
+            </p>
+          </div>
+
+          {/* Today's Total Check-Ins */}
           <div className="bg-white border border-slate-300 rounded p-4 shadow-xs">
             <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-              Today&apos;s Total Visitors
+              Today&apos;s Check-Ins
             </p>
             <p className="text-3xl font-extrabold text-slate-900 mt-1">
               {stats.todayTotal}
             </p>
             <p className="text-xs text-slate-500 mt-1">
-              Visitors registered today ({todayDateString})
+              Entries recorded today
             </p>
           </div>
 
-          {/* Total Visitors in Database */}
+          {/* Today's Check-Outs */}
+          <div className="bg-white border border-slate-300 rounded p-4 shadow-xs">
+            <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+              Today&apos;s Check-Outs
+            </p>
+            <p className="text-3xl font-extrabold text-slate-900 mt-1">
+              {stats.checkedOutToday}
+            </p>
+            <p className="text-xs text-slate-500 mt-1">
+              Departures completed today
+            </p>
+          </div>
+
+          {/* Total Registered in System */}
           <div className="bg-white border border-slate-300 rounded p-4 shadow-xs">
             <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
               Total Visitors
@@ -250,24 +409,11 @@ export default function App() {
               All records stored in register
             </p>
           </div>
-
-          {/* System Date & Station */}
-          <div className="bg-white border border-slate-300 rounded p-4 shadow-xs">
-            <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-              Current Reception Desk
-            </p>
-            <p className="text-base font-bold text-slate-800 mt-2 truncate">
-              {currentUser.stationName}
-            </p>
-            <p className="text-xs text-slate-500 mt-1">
-              Desk ID: <strong className="text-slate-700">{currentUser.deskId}</strong>
-            </p>
-          </div>
         </div>
 
         {/* 2-Column Responsive Workspace */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Left Column: Add / Edit Visitor Form (4 columns on desktop) */}
+          {/* Left Column: Check In / Edit Visitor Form (4 columns on desktop) */}
           <div className="lg:col-span-4">
             <VisitorForm
               onSubmit={handleSubmitForm}
@@ -277,12 +423,16 @@ export default function App() {
             />
           </div>
 
-          {/* Right Column: View / Search / Edit / Delete Table (8 columns on desktop) */}
+          {/* Right Column: View / Filter / Check-Out Register Table (8 columns on desktop) */}
           <div className="lg:col-span-8">
             <VisitorTable
               visitors={visitors}
               searchQuery={searchQuery}
               setSearchQuery={setSearchQuery}
+              statusFilter={statusFilter}
+              setStatusFilter={setStatusFilter}
+              onCheckOut={handleCheckOut}
+              onCheckIn={handleCheckIn}
               onEdit={(visitor) => {
                 setEditingVisitor(visitor);
                 window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -290,6 +440,7 @@ export default function App() {
               onDelete={handleDeleteVisitor}
               onExportCsv={handleExportCsv}
               loading={loading}
+              checkingId={checkingId}
             />
           </div>
         </div>
@@ -301,6 +452,15 @@ export default function App() {
         onClose={() => setShowDesksModal(false)}
         currentUser={currentUser}
         onSwitchUser={(_deskId) => {}}
+      />
+
+      {/* MongoDB Database Location & Status Modal */}
+      <DatabaseStatusModal
+        isOpen={showDbModal}
+        onClose={() => setShowDbModal(false)}
+        status={dbStatus}
+        onRefresh={fetchData}
+        onAlert={showAlert}
       />
 
       {/* Standard Human Developer Footer */}

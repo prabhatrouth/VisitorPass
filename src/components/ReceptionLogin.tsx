@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { loginReceptionDesk, createReceptionDesk } from '../services/api.ts';
-import { ReceptionUser } from '../types/index.ts';
+import React, { useState, useEffect } from 'react';
+import { loginReceptionDesk, createReceptionDesk, getDbStatus } from '../services/api.ts';
+import { ReceptionUser, DbStatus } from '../types/index.ts';
+import { DatabaseStatusModal } from './DatabaseStatusModal.tsx';
 
 interface ReceptionLoginProps {
   onLoginSuccess: (user: ReceptionUser) => void;
@@ -24,6 +25,17 @@ export const ReceptionLogin: React.FC<ReceptionLoginProps> = ({ onLoginSuccess }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  const [dbStatus, setDbStatus] = useState<DbStatus | null>(null);
+  const [showDbModal, setShowDbModal] = useState(false);
+
+  const loadStatus = () => {
+    getDbStatus().then(setDbStatus).catch(() => {});
+  };
+
+  useEffect(() => {
+    loadStatus();
+  }, []);
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -303,9 +315,38 @@ export const ReceptionLogin: React.FC<ReceptionLoginProps> = ({ onLoginSuccess }
           )}
         </div>
 
-        <div className="text-center mt-4 text-xs text-slate-500">
-          Employee Visitor Registration System • Front Desk Portal
+        <div className="flex flex-col items-center justify-center mt-4 gap-2 text-xs text-slate-500">
+          <button
+            type="button"
+            onClick={() => setShowDbModal(true)}
+            className={`px-3 py-1 rounded-full text-[11px] font-medium border flex items-center gap-1.5 transition cursor-pointer shadow-2xs ${
+              dbStatus?.isConnected
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
+                : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+            }`}
+          >
+            <span
+              className={`h-2 w-2 rounded-full ${
+                dbStatus?.isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+              }`}
+            ></span>
+            <span>
+              {dbStatus?.isConnected
+                ? `MongoDB Connected (${dbStatus.databaseName || 'test'}.visitors: ${dbStatus.mongoVisitorCount})`
+                : 'Storage: Local File (data/visitors.json) • Click for DB details'}
+            </span>
+          </button>
+
+          <div>Employee Visitor Registration System • Front Desk Portal</div>
         </div>
+
+        <DatabaseStatusModal
+          isOpen={showDbModal}
+          onClose={() => setShowDbModal(false)}
+          status={dbStatus}
+          onRefresh={loadStatus}
+          onAlert={(msg) => setSuccessMsg(msg)}
+        />
       </div>
     </div>
   );

@@ -1,3 +1,5 @@
+export type VisitorStatus = 'CHECKED_IN' | 'CHECKED_OUT';
+
 export interface Visitor {
   id: string;
   name: string;
@@ -5,8 +7,12 @@ export interface Visitor {
   companyOrCollege: string;
   personToMeet: string;
   purposeOfVisit: string;
-  dateTime: string;
+  dateTime: string; // Original registration date-time
+  status: VisitorStatus;
+  checkInTime: string;
+  checkOutTime?: string | null;
   registeredByDesk?: string;
+  checkedOutByDesk?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -18,12 +24,17 @@ export interface VisitorFormData {
   personToMeet: string;
   purposeOfVisit: string;
   dateTime?: string;
+  status?: VisitorStatus;
+  checkInTime?: string;
+  checkOutTime?: string | null;
   registeredByDesk?: string;
 }
 
 export interface VisitorStats {
   todayTotal: number;
   totalVisitors: number;
+  currentlyInside: number;
+  checkedOutToday: number;
 }
 
 export interface ReceptionDesk {

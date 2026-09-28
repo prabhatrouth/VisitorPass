@@ -147,11 +147,14 @@ apiRouter.delete('/receptions/:id', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/visitors - View all records (with optional search by name or mobile number)
+// GET /api/visitors - View all records (with optional search and status filter)
 apiRouter.get('/visitors', async (req: Request, res: Response) => {
   try {
-    const { search } = req.query;
-    const visitors = await db.getAll(typeof search === 'string' ? search : undefined);
+    const { search, status } = req.query;
+    const visitors = await db.getAll(
+      typeof search === 'string' ? search : undefined,
+      typeof status === 'string' ? status : undefined
+    );
     res.json({ success: true, count: visitors.length, data: visitors });
   } catch (error) {
     console.error('Error fetching visitors:', error);
@@ -159,7 +162,7 @@ apiRouter.get('/visitors', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/visitors/stats - Dashboard showing today's total visitors
+// GET /api/visitors/stats - Dashboard showing total, inside, check-ins, check-outs
 apiRouter.get('/visitors/stats', async (_req: Request, res: Response) => {
   try {
     const stats = await db.getStats();
@@ -170,11 +173,14 @@ apiRouter.get('/visitors/stats', async (_req: Request, res: Response) => {
   }
 });
 
-// GET /api/visitors/export - Export visitor list to CSV
+// GET /api/visitors/export - Export visitor list to CSV with check-in/out timestamps and duration
 apiRouter.get('/visitors/export', async (req: Request, res: Response) => {
   try {
-    const { search } = req.query;
-    const visitors = await db.getAll(typeof search === 'string' ? search : undefined);
+    const { search, status } = req.query;
+    const visitors = await db.getAll(
+      typeof search === 'string' ? search : undefined,
+      typeof status === 'string' ? status : undefined
+    );
 
     const headers = [
       'Name',
@@ -182,7 +188,10 @@ apiRouter.get('/visitors/export', async (req: Request, res: Response) => {
       'Company/College Name',
       'Person to Meet',
       'Purpose of Visit',
-      'Date & Time',
+      'Status',
+      'Check-in Time',
+      'Check-out Time',
+      'Duration (Minutes)',
     ];
 
     const escapeCsv = (str: string | null | undefined): string => {
@@ -191,14 +200,29 @@ apiRouter.get('/visitors/export', async (req: Request, res: Response) => {
       return `"${clean}"`;
     };
 
-    const rows = visitors.map((v) => [
-      escapeCsv(v.name),
-      escapeCsv(v.mobileNumber),
-      escapeCsv(v.companyOrCollege),
-      escapeCsv(v.personToMeet),
-      escapeCsv(v.purposeOfVisit),
-      escapeCsv(new Date(v.dateTime).toLocaleString()),
-    ]);
+    const rows = visitors.map((v) => {
+      const inTime = v.checkInTime || v.dateTime;
+      const outTime = v.checkOutTime;
+      let durationMinutes = '';
+      if (inTime && outTime) {
+        const diffMs = new Date(outTime).getTime() - new Date(inTime).getTime();
+        if (diffMs > 0) {
+          durationMinutes = Math.round(diffMs / (1000 * 60)).toString();
+        }
+      }
+
+      return [
+        escapeCsv(v.name),
+        escapeCsv(v.mobileNumber),
+        escapeCsv(v.companyOrCollege),
+        escapeCsv(v.personToMeet),
+        escapeCsv(v.purposeOfVisit),
+        escapeCsv(v.status === 'CHECKED_IN' ? 'Checked In (Inside)' : 'Checked Out'),
+        escapeCsv(inTime ? new Date(inTime).toLocaleString() : ''),
+        escapeCsv(outTime ? new Date(outTime).toLocaleString() : 'Still Inside'),
+        escapeCsv(durationMinutes),
+      ];
+    });
 
     const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
     const timestamp = new Date().toISOString().slice(0, 10);
@@ -213,10 +237,20 @@ apiRouter.get('/visitors/export', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/visitors - Add a new visitor
+// POST /api/visitors - Add and Check-In a new visitor
 apiRouter.post('/visitors', async (req: Request, res: Response) => {
   try {
-    const { name, mobileNumber, companyOrCollege, personToMeet, purposeOfVisit, dateTime } = req.body;
+    const {
+      name,
+      mobileNumber,
+      companyOrCollege,
+      personToMeet,
+      purposeOfVisit,
+      dateTime,
+      status,
+      checkInTime,
+      registeredByDesk,
+    } = req.body;
 
     // Field Validations
     if (!name || !name.trim()) {
@@ -242,16 +276,65 @@ apiRouter.post('/visitors', async (req: Request, res: Response) => {
       personToMeet,
       purposeOfVisit,
       dateTime,
+      status: status || 'CHECKED_IN',
+      checkInTime: checkInTime || dateTime || new Date().toISOString(),
+      registeredByDesk: registeredByDesk || 'admin',
     });
 
     res.status(201).json({
       success: true,
-      message: 'Visitor registered successfully',
+      message: `Visitor "${newVisitor.name}" checked in successfully`,
       data: newVisitor,
     });
   } catch (error) {
     console.error('Error registering visitor:', error);
     res.status(500).json({ success: false, message: 'Failed to register visitor' });
+  }
+});
+
+// POST /api/visitors/:id/checkout - Check-out a visitor
+apiRouter.post('/visitors/:id/checkout', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { deskId, checkOutTime } = req.body;
+
+    const existing = await db.getById(id);
+    if (!existing) {
+      return res.status(404).json({ success: false, message: 'Visitor not found' });
+    }
+
+    const updated = await db.checkOut(id, deskId, checkOutTime);
+    res.json({
+      success: true,
+      message: `Visitor "${existing.name}" checked out successfully`,
+      data: updated,
+    });
+  } catch (error: any) {
+    console.error('Error checking out visitor:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to check out visitor' });
+  }
+});
+
+// POST /api/visitors/:id/checkin - Check-in or Re-check-in a visitor
+apiRouter.post('/visitors/:id/checkin', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { deskId, checkInTime } = req.body;
+
+    const existing = await db.getById(id);
+    if (!existing) {
+      return res.status(404).json({ success: false, message: 'Visitor not found' });
+    }
+
+    const updated = await db.checkIn(id, deskId, checkInTime);
+    res.json({
+      success: true,
+      message: `Visitor "${existing.name}" checked in successfully`,
+      data: updated,
+    });
+  } catch (error: any) {
+    console.error('Error checking in visitor:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to check in visitor' });
   }
 });
 
@@ -298,5 +381,69 @@ apiRouter.delete('/visitors/:id', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error deleting visitor:', error);
     res.status(500).json({ success: false, message: 'Failed to delete visitor' });
+  }
+});
+
+// GET /api/db/status - Storage and MongoDB status diagnostic
+apiRouter.get('/db/status', async (_req: Request, res: Response) => {
+  try {
+    const status = await db.getDbStatus();
+    res.json({ success: true, data: status });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message || 'Failed to check DB status' });
+  }
+});
+
+// POST /api/db/migrate - Sync/migrate local visitors to MongoDB
+apiRouter.post('/db/migrate', async (_req: Request, res: Response) => {
+  try {
+    const result = await db.migrateLocalVisitorsToMongo();
+    res.json({
+      success: true,
+      message: `Successfully migrated ${result.migrated} records into MongoDB collection "visitors" (${result.total} evaluated).`,
+      data: result,
+    });
+  } catch (error: any) {
+    res.status(400).json({ success: false, message: error.message || 'Failed to migrate data' });
+  }
+});
+
+// POST /api/db/connect - Connect to live MongoDB
+apiRouter.post('/db/connect', async (req: Request, res: Response) => {
+  try {
+    const { uri, dbName } = req.body;
+    if (!uri || !uri.trim()) {
+      return res.status(400).json({ success: false, message: 'MongoDB connection URI is required.' });
+    }
+
+    const connectResult = await db.connectMongo(uri, dbName, true);
+    const status = await db.getDbStatus();
+
+    res.json({
+      success: true,
+      message: `Successfully connected to live MongoDB database "${connectResult.databaseName}"! All data is now stored exclusively in MongoDB.`,
+      data: status,
+    });
+  } catch (error: any) {
+    console.error('Error connecting to MongoDB:', error);
+    res.status(400).json({
+      success: false,
+      message: error.message || 'Failed to connect to MongoDB',
+    });
+  }
+});
+
+// POST /api/db/disconnect - Disconnect from MongoDB
+apiRouter.post('/db/disconnect', async (_req: Request, res: Response) => {
+  try {
+    await db.disconnectMongo();
+    const status = await db.getDbStatus();
+    res.json({
+      success: true,
+      message: 'MongoDB disconnected.',
+      data: status,
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message || 'Failed to disconnect' });
   }
 });

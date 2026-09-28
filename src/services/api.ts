@@ -1,4 +1,11 @@
-import { Visitor, VisitorFormData, VisitorStats, ReceptionUser, ReceptionDesk } from '../types/index.ts';
+import {
+  Visitor,
+  VisitorFormData,
+  VisitorStats,
+  ReceptionUser,
+  ReceptionDesk,
+  DbStatus,
+} from '../types/index.ts';
 
 const BASE_URL = '/api';
 
@@ -63,10 +70,13 @@ export async function deleteReceptionDesk(id: string): Promise<boolean> {
   return true;
 }
 
-export async function getVisitors(search?: string): Promise<Visitor[]> {
+export async function getVisitors(search?: string, status?: string): Promise<Visitor[]> {
   const query = new URLSearchParams();
   if (search && search.trim()) {
     query.append('search', search.trim());
+  }
+  if (status && status !== 'ALL') {
+    query.append('status', status.trim());
   }
 
   const res = await fetch(`${BASE_URL}/visitors?${query.toString()}`);
@@ -83,7 +93,41 @@ export async function getVisitorStats(): Promise<VisitorStats> {
     throw new Error('Failed to fetch stats');
   }
   const json = await res.json();
-  return json.data || { todayTotal: 0, totalVisitors: 0 };
+  return json.data || { todayTotal: 0, totalVisitors: 0, currentlyInside: 0, checkedOutToday: 0 };
+}
+
+export async function checkOutVisitor(
+  id: string,
+  deskId?: string,
+  checkOutTime?: string
+): Promise<Visitor> {
+  const res = await fetch(`${BASE_URL}/visitors/${id}/checkout`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deskId, checkOutTime }),
+  });
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(json.message || 'Failed to check out visitor');
+  }
+  return json.data;
+}
+
+export async function checkInVisitor(
+  id: string,
+  deskId?: string,
+  checkInTime?: string
+): Promise<Visitor> {
+  const res = await fetch(`${BASE_URL}/visitors/${id}/checkin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deskId, checkInTime }),
+  });
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(json.message || 'Failed to check in visitor');
+  }
+  return json.data;
 }
 
 export async function createVisitor(data: VisitorFormData): Promise<Visitor> {
@@ -123,10 +167,61 @@ export async function deleteVisitor(id: string): Promise<boolean> {
   return true;
 }
 
-export function getExportCsvUrl(search?: string): string {
+export function getExportCsvUrl(search?: string, status?: string): string {
   const query = new URLSearchParams();
   if (search && search.trim()) {
     query.append('search', search.trim());
   }
+  if (status && status !== 'ALL') {
+    query.append('status', status.trim());
+  }
   return `${BASE_URL}/visitors/export?${query.toString()}`;
 }
+
+export async function getDbStatus(): Promise<DbStatus> {
+  const res = await fetch(`${BASE_URL}/db/status`);
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(json.message || 'Failed to fetch database status');
+  }
+  return json.data;
+}
+
+export async function migrateDb(): Promise<{ migrated: number; total: number }> {
+  const res = await fetch(`${BASE_URL}/db/migrate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(json.message || 'Failed to migrate data to MongoDB');
+  }
+  return json.data;
+}
+
+export async function connectDb(uri: string, dbName?: string): Promise<{ message: string; data: DbStatus }> {
+  const res = await fetch(`${BASE_URL}/db/connect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uri, dbName }),
+  });
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(json.message || 'Failed to connect to MongoDB');
+  }
+  return json;
+}
+
+export async function disconnectDb(): Promise<DbStatus> {
+  const res = await fetch(`${BASE_URL}/db/disconnect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(json.message || 'Failed to disconnect from MongoDB');
+  }
+  return json.data;
+}
+
+
