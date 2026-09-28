@@ -199,29 +199,3 @@ export async function migrateDb(): Promise<{ migrated: number; total: number }> 
   return json.data;
 }
 
-export async function connectDb(uri: string, dbName?: string): Promise<{ message: string; data: DbStatus }> {
-  const res = await fetch(`${BASE_URL}/db/connect`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ uri, dbName }),
-  });
-  const json = await res.json();
-  if (!res.ok) {
-    throw new Error(json.message || 'Failed to connect to MongoDB');
-  }
-  return json;
-}
-
-export async function disconnectDb(): Promise<DbStatus> {
-  const res = await fetch(`${BASE_URL}/db/disconnect`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-  });
-  const json = await res.json();
-  if (!res.ok) {
-    throw new Error(json.message || 'Failed to disconnect from MongoDB');
-  }
-  return json.data;
-}
-
-

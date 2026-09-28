@@ -238,7 +238,7 @@ export default function App() {
                   ? 'bg-emerald-950/80 text-emerald-300 border-emerald-600/70 hover:bg-emerald-900'
                   : 'bg-amber-950/80 text-amber-300 border-amber-600/70 hover:bg-amber-900'
               }`}
-              title="Click to view live MongoDB connection details or connect MongoDB"
+              title="Click to inspect database location and MongoDB status"
             >
               <span
                 className={`h-2 w-2 rounded-full ${
@@ -247,8 +247,8 @@ export default function App() {
               ></span>
               <span>
                 {dbStatus?.isConnected
-                  ? `Live MongoDB: ${dbStatus.databaseName || 'visitor_db'} (${dbStatus.mongoVisitorCount})`
-                  : 'MongoDB Not Connected (Click to Connect)'}
+                  ? `MongoDB: ${dbStatus.databaseName || 'test'} (${dbStatus.mongoVisitorCount})`
+                  : 'Storage: Local File (data/visitors.json)'}
               </span>
             </button>
 
@@ -303,49 +303,6 @@ export default function App() {
               className="text-xs underline ml-2 font-bold cursor-pointer"
             >
               Dismiss
-            </button>
-          </div>
-        )}
-
-        {/* Live MongoDB Connection Banner */}
-        {dbStatus?.isConnected ? (
-          <div className="bg-emerald-50 border border-emerald-300 rounded px-4 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-emerald-900 shadow-2xs">
-            <div className="flex items-center gap-2.5">
-              <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              <div>
-                <strong>LIVE MONGODB ACTIVE:</strong> All records are stored directly in live MongoDB database{' '}
-                <span className="font-mono font-bold bg-white px-1.5 py-0.5 rounded border border-emerald-200">
-                  {dbStatus.databaseName || 'visitor_db'}
-                </span>{' '}
-                &gt; collection{' '}
-                <span className="font-mono font-bold bg-white px-1.5 py-0.5 rounded border border-emerald-200">
-                  visitors
-                </span>{' '}
-                ({dbStatus.mongoVisitorCount} documents).
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowDbModal(true)}
-              className="text-xs font-bold text-emerald-800 hover:text-emerald-950 underline cursor-pointer whitespace-nowrap"
-            >
-              MongoDB Settings &amp; Info ↗
-            </button>
-          </div>
-        ) : (
-          <div className="bg-amber-50 border-2 border-amber-300 rounded px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950 shadow-2xs">
-            <div className="flex items-center gap-2.5">
-              <span className="h-3 w-3 rounded-full bg-amber-500"></span>
-              <div>
-                <strong>STORE ONLY IN MONGODB LIVE DATA:</strong> MongoDB is not connected yet. Connect your MongoDB Atlas connection string to save all visitor logs directly to live MongoDB.
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowDbModal(true)}
-              className="px-3.5 py-1.5 bg-amber-700 hover:bg-amber-800 text-white rounded font-bold text-xs cursor-pointer whitespace-nowrap shadow-xs"
-            >
-              Connect Live MongoDB ↗
             </button>
           </div>
         )}

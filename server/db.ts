@@ -36,112 +36,29 @@ class VisitorDatabase {
   private async initMongoConnection(): Promise<void> {
     const uri = process.env.MONGODB_URI;
     if (!uri) {
-      this.mongoError = 'MONGODB_URI is not set. Data is currently in temporary mode. Please connect your live MongoDB URI to store data directly in MongoDB.';
-      console.log('[VisitorPass Database] MONGODB_URI not found.');
+      this.mongoError = 'MONGODB_URI is not set in environment. Storing data in local JSON file (data/visitors.json).';
+      console.log('[VisitorPass Database] MONGODB_URI not found. Using local file storage (data/visitors.json).');
       return;
     }
 
     try {
-      await this.connectMongo(uri, process.env.MONGODB_DB_NAME, false);
-    } catch (err: any) {
-      console.error('[VisitorPass Database] Initial MongoDB connection failed:', err.message);
-    }
-  }
-
-  public async connectMongo(
-    rawUri: string,
-    customDbName?: string,
-    persistToEnv: boolean = true
-  ): Promise<{
-    success: boolean;
-    databaseName: string;
-    collectionName: string;
-    mongoVisitorCount: number;
-    maskedUri: string;
-  }> {
-    const uri = rawUri.trim();
-    if (!uri.startsWith('mongodb://') && !uri.startsWith('mongodb+srv://')) {
-      throw new Error('Invalid MongoDB connection string. Must start with mongodb:// or mongodb+srv://');
-    }
-
-    try {
-      if (mongoose.connection.readyState !== 0) {
-        await mongoose.disconnect();
-      }
-
-      const masked = uri.replace(/\/\/([^:]+):([^@]+)@/, '//$1:****@');
-      this.mongoDbUri = masked;
-
-      const dbName = customDbName?.trim() || process.env.MONGODB_DB_NAME || undefined;
+      this.mongoDbUri = uri.replace(/\/\/([^:]+):([^@]+)@/, '//$1:****@');
+      const customDbName = process.env.MONGODB_DB_NAME;
       await mongoose.connect(uri, {
-        serverSelectionTimeoutMS: 10000,
-        ...(dbName ? { dbName } : {}),
+        ...(customDbName ? { dbName: customDbName } : {}),
       });
-
-      // Verify connection with ping
-      await mongoose.connection.db?.admin().ping();
 
       this.isConnectedToMongo = true;
       this.mongoDatabaseName = mongoose.connection.name || (mongoose.connection.db as any)?.databaseName || 'test';
       this.mongoError = null;
+      console.log(`[VisitorPass Database] Successfully connected to MongoDB: database="${this.mongoDatabaseName}", URI="${this.mongoDbUri}"`);
 
-      if (persistToEnv) {
-        this.saveEnv('MONGODB_URI', uri);
-        if (dbName) {
-          this.saveEnv('MONGODB_DB_NAME', dbName);
-        }
-      }
-
-      console.log(`[VisitorPass Database] LIVE MongoDB active: database="${this.mongoDatabaseName}", uri="${masked}"`);
-
-      // Ensure receptionist desk and migrate existing records
-      await this.ensurePrimaryReceptionDesk();
+      // Auto-migrate local file visitors into MongoDB if MongoDB visitors collection is empty
       await this.autoMigrateLocalDataIfEmpty();
-
-      const count = await VisitorModel.countDocuments();
-
-      return {
-        success: true,
-        databaseName: this.mongoDatabaseName,
-        collectionName: 'visitors',
-        mongoVisitorCount: count,
-        maskedUri: masked,
-      };
     } catch (err: any) {
-      this.isConnectedToMongo = false;
       this.mongoError = err.message || 'Failed to connect to MongoDB';
-      console.error('[VisitorPass Database] MongoDB connect error:', err.message);
-      throw new Error(`MongoDB connection failed: ${err.message}`);
-    }
-  }
-
-  public async disconnectMongo(): Promise<void> {
-    if (mongoose.connection.readyState !== 0) {
-      await mongoose.disconnect();
-    }
-    this.isConnectedToMongo = false;
-    this.mongoDatabaseName = '';
-    this.mongoError = 'MongoDB disconnected by user request.';
-  }
-
-  private saveEnv(key: string, value: string): void {
-    try {
-      const envPath = path.resolve(process.cwd(), '.env');
-      let content = '';
-      if (fs.existsSync(envPath)) {
-        content = fs.readFileSync(envPath, 'utf-8');
-      }
-      const regex = new RegExp(`^${key}=.*$`, 'm');
-      const newLine = `${key}="${value}"`;
-      if (regex.test(content)) {
-        content = content.replace(regex, newLine);
-      } else {
-        content = content.trim() ? `${content.trim()}\n${newLine}\n` : `${newLine}\n`;
-      }
-      fs.writeFileSync(envPath, content, 'utf-8');
-      process.env[key] = value;
-    } catch (err) {
-      console.error('Error saving .env file:', err);
+      console.error('[VisitorPass Database] MongoDB connection failed, using local file storage:', this.mongoError);
+      this.isConnectedToMongo = false;
     }
   }
 

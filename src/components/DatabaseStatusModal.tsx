@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { DbStatus } from '../types/index.ts';
-import { migrateDb, connectDb, disconnectDb } from '../services/api.ts';
+import { migrateDb } from '../services/api.ts';
 
 interface DatabaseStatusModalProps {
   isOpen: boolean;
@@ -17,52 +17,9 @@ export const DatabaseStatusModal: React.FC<DatabaseStatusModalProps> = ({
   onRefresh,
   onAlert,
 }) => {
-  const [mongoUriInput, setMongoUriInput] = useState('');
-  const [dbNameInput, setDbNameInput] = useState('visitor_db');
-  const [connecting, setConnecting] = useState(false);
-  const [disconnecting, setDisconnecting] = useState(false);
   const [migrating, setMigrating] = useState(false);
-  const [connectionError, setConnectionError] = useState<string | null>(null);
 
   if (!isOpen) return null;
-
-  const handleConnect = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!mongoUriInput.trim()) {
-      setConnectionError('Please enter your MongoDB connection string URI.');
-      return;
-    }
-
-    try {
-      setConnecting(true);
-      setConnectionError(null);
-      const res = await connectDb(mongoUriInput.trim(), dbNameInput.trim() || undefined);
-      onAlert(res.message, 'success');
-      setMongoUriInput('');
-      onRefresh();
-    } catch (err: any) {
-      setConnectionError(err.message || 'Failed to connect to MongoDB');
-      onAlert(err.message || 'Failed to connect to MongoDB', 'error');
-    } finally {
-      setConnecting(false);
-    }
-  };
-
-  const handleDisconnect = async () => {
-    const confirm = window.confirm('Disconnect from live MongoDB?');
-    if (!confirm) return;
-
-    try {
-      setDisconnecting(true);
-      await disconnectDb();
-      onAlert('Disconnected from MongoDB', 'success');
-      onRefresh();
-    } catch (err: any) {
-      onAlert(err.message || 'Failed to disconnect', 'error');
-    } finally {
-      setDisconnecting(false);
-    }
-  };
 
   const handleMigrate = async () => {
     try {
@@ -79,17 +36,17 @@ export const DatabaseStatusModal: React.FC<DatabaseStatusModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto">
-      <div className="bg-white rounded-lg border border-slate-300 shadow-2xl max-w-xl w-full p-6 space-y-4 my-8">
+      <div className="bg-white rounded border border-slate-300 shadow-xl max-w-xl w-full p-6 space-y-4 my-8">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-          <div className="flex items-center gap-2.5">
-            <span className="text-2xl">🍃</span>
+          <div className="flex items-center gap-2">
+            <span className="text-xl">🍃</span>
             <div>
               <h2 className="text-base font-bold text-slate-900">
-                MongoDB Live Database Storage
+                MongoDB Storage &amp; Database Location
               </h2>
               <p className="text-xs text-slate-500">
-                Store and query visitor registration records exclusively in MongoDB
+                Locate your data in MongoDB Atlas / Compass
               </p>
             </div>
           </div>
@@ -104,182 +61,130 @@ export const DatabaseStatusModal: React.FC<DatabaseStatusModalProps> = ({
 
         {/* Current Connection Status Box */}
         {status?.isConnected ? (
-          <div className="bg-emerald-50 border-2 border-emerald-400 rounded-lg p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="h-3 w-3 rounded-full bg-emerald-500 animate-pulse"></span>
-                <span className="text-xs font-bold text-emerald-950 uppercase tracking-wide">
-                  Live MongoDB Active (Storing Exclusively in MongoDB)
-                </span>
-              </div>
-              <span className="text-[11px] font-mono bg-emerald-200/70 text-emerald-900 px-2 py-0.5 rounded font-bold">
-                LIVE
+          <div className="bg-emerald-50 border border-emerald-300 rounded p-4 space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="h-3 w-3 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span className="text-xs font-bold text-emerald-900 uppercase tracking-wide">
+                MongoDB is Connected &amp; Active
               </span>
             </div>
 
-            <p className="text-xs text-emerald-900 font-medium">
-              All visitor check-in, check-out, and registration logs are stored directly and exclusively in your live MongoDB cluster.
+            <p className="text-xs text-emerald-800">
+              New visitor registrations and check-ins are actively saved to your MongoDB database.
             </p>
 
-            <div className="grid grid-cols-2 gap-2 text-xs bg-white p-3 rounded border border-emerald-200 shadow-2xs">
+            <div className="mt-3 grid grid-cols-2 gap-2 text-xs bg-white/80 p-3 rounded border border-emerald-200">
               <div>
                 <span className="text-slate-500 block text-[11px]">Database Name:</span>
-                <span className="font-mono font-bold text-slate-900 text-sm">
-                  {status.databaseName || 'visitor_db'}
+                <span className="font-mono font-bold text-slate-800 text-sm">
+                  {status.databaseName || 'test'}
                 </span>
               </div>
 
               <div>
                 <span className="text-slate-500 block text-[11px]">Collection Name:</span>
-                <span className="font-mono font-bold text-slate-900 text-sm">
+                <span className="font-mono font-bold text-slate-800 text-sm">
                   {status.collectionName}
                 </span>
               </div>
 
               <div>
-                <span className="text-slate-500 block text-[11px]">Live Documents in MongoDB:</span>
-                <span className="font-bold text-emerald-700 text-base">
-                  {status.mongoVisitorCount} visitors
+                <span className="text-slate-500 block text-[11px]">Visitors in MongoDB:</span>
+                <span className="font-bold text-emerald-700 text-sm">
+                  {status.mongoVisitorCount} records
                 </span>
               </div>
 
               <div>
-                <span className="text-slate-500 block text-[11px]">Status:</span>
-                <span className="inline-flex items-center gap-1 font-semibold text-emerald-700 text-xs mt-1">
-                  ✓ Verified Live Connection
+                <span className="text-slate-500 block text-[11px]">Local File Backup:</span>
+                <span className="font-medium text-slate-700 text-sm">
+                  {status.localVisitorCount} records
                 </span>
               </div>
             </div>
 
             {status.maskedUri && (
-              <p className="text-[11px] font-mono text-slate-600 break-all bg-emerald-100/50 p-2 rounded">
+              <p className="text-[11px] font-mono text-slate-500 break-all pt-1">
                 URI: {status.maskedUri}
               </p>
             )}
 
-            <div className="flex items-center gap-2 pt-1">
-              {status.localVisitorCount > 0 && status.localVisitorCount !== status.mongoVisitorCount && (
+            {status.localVisitorCount > 0 && status.localVisitorCount !== status.mongoVisitorCount && (
+              <div className="pt-2">
                 <button
                   type="button"
                   onClick={handleMigrate}
                   disabled={migrating}
-                  className="flex-1 py-1.5 px-3 bg-emerald-700 hover:bg-emerald-800 text-white rounded text-xs font-bold transition cursor-pointer disabled:opacity-50"
+                  className="w-full py-2 px-3 bg-emerald-700 hover:bg-emerald-800 text-white rounded text-xs font-bold transition cursor-pointer disabled:opacity-50"
                 >
-                  {migrating ? 'Syncing...' : 'Sync Local Backup into MongoDB'}
+                  {migrating ? 'Syncing...' : 'Sync Local File Visitors into MongoDB Collection'}
                 </button>
-              )}
-
-              <button
-                type="button"
-                onClick={handleDisconnect}
-                disabled={disconnecting}
-                className="py-1.5 px-3 border border-red-300 text-red-700 hover:bg-red-50 rounded text-xs font-semibold transition cursor-pointer"
-              >
-                {disconnecting ? 'Disconnecting...' : 'Disconnect'}
-              </button>
-            </div>
+              </div>
+            )}
           </div>
         ) : (
-          <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-4 space-y-2">
+          <div className="bg-amber-50 border border-amber-300 rounded p-4 space-y-2">
             <div className="flex items-center gap-2">
               <span className="h-3 w-3 rounded-full bg-amber-500"></span>
-              <span className="text-xs font-bold text-amber-950 uppercase tracking-wide">
-                MongoDB Not Connected (Temporary Fallback Mode)
+              <span className="text-xs font-bold text-amber-900 uppercase tracking-wide">
+                Operating in Local File Storage Mode
               </span>
             </div>
 
-            <p className="text-xs text-amber-900">
-              To store <strong>only in MongoDB live data</strong>, connect your MongoDB Atlas or local MongoDB instance below.
+            <p className="text-xs text-amber-800">
+              Your visitors are currently saved in local file storage (<strong>data/visitors.json</strong>, {status?.localVisitorCount || 0} records) because MongoDB is not yet connected.
             </p>
 
             {status?.error && (
-              <div className="bg-white p-2.5 rounded border border-amber-200 text-xs font-mono text-amber-900 break-words">
-                <strong>Error:</strong> {status.error}
+              <div className="bg-white/80 p-2.5 rounded border border-amber-200 text-xs font-mono text-amber-900 break-words">
+                <strong>Reason:</strong> {status.error}
               </div>
             )}
           </div>
         )}
 
-        {/* Connect to MongoDB Form */}
-        <form onSubmit={handleConnect} className="border border-slate-200 rounded-lg p-4 bg-slate-50 space-y-3">
-          <h3 className="font-bold text-slate-900 text-xs flex items-center justify-between">
-            <span>🔌 Connect Live MongoDB Atlas Database</span>
-            <span className="text-[11px] font-normal text-slate-500">Auto-saved to .env</span>
+        {/* Where to Find Data in MongoDB Checklist */}
+        <div className="border border-slate-200 rounded p-3.5 bg-slate-50 text-xs space-y-2 text-slate-700">
+          <h3 className="font-bold text-slate-900 flex items-center gap-1.5 text-xs">
+            <span>📍</span> Where to Find Your Data in MongoDB Atlas:
           </h3>
 
-          <div>
-            <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-              MongoDB Connection String URI <span className="text-red-600">*</span>
-            </label>
-            <input
-              type="text"
-              required
-              placeholder="mongodb+srv://<username>:<password>@cluster0.abcde.mongodb.net/visitor_db?retryWrites=true&w=majority"
-              value={mongoUriInput}
-              onChange={(e) => {
-                setMongoUriInput(e.target.value);
-                setConnectionError(null);
-              }}
-              className="w-full px-3 py-2 text-xs font-mono border border-slate-300 rounded bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-500"
-            />
-            <p className="text-[10px] text-slate-500 mt-1">
-              Paste your standard MongoDB Atlas or self-hosted MongoDB URI.
+          <ol className="list-decimal pl-5 space-y-1.5 text-[11px] leading-relaxed">
+            <li>
+              Log into <a href="https://cloud.mongodb.com" target="_blank" rel="noreferrer" className="text-blue-700 font-semibold underline">MongoDB Atlas</a> and click <strong>&quot;Browse Collections&quot;</strong> on your Cluster.
+            </li>
+            <li>
+              Look under the database named <strong>&quot;{status?.databaseName || 'visitor_db'}&quot;</strong> or <strong>&quot;test&quot;</strong> (if no database name was specified in the connection string URI).
+            </li>
+            <li>
+              Select the collection <strong>&quot;visitors&quot;</strong> to view all registered visitors and check-in / check-out logs.
+            </li>
+            <li>
+              Select the collection <strong>&quot;receptiondesks&quot;</strong> to view reception accounts.
+            </li>
+          </ol>
+        </div>
+
+        {/* Setup Guide if Not Connected or Deploying to Render */}
+        <div className="border border-slate-200 rounded p-3.5 bg-white text-xs space-y-2 text-slate-700">
+          <h3 className="font-bold text-slate-900 flex items-center gap-1.5 text-xs">
+            <span>⚙️</span> How to Connect MongoDB on Render / Local:
+          </h3>
+
+          <div className="space-y-1.5 text-[11px] text-slate-600">
+            <p>
+              1. In <strong>MongoDB Atlas</strong> &gt; <strong>Network Access</strong>, ensure <strong>0.0.0.0/0</strong> (Allow access from anywhere) is active so Render or your server can connect.
+            </p>
+            <p>
+              2. In your <strong>Render Dashboard</strong> &gt; Select your service &gt; <strong>Environment</strong>:
+            </p>
+            <div className="bg-slate-900 text-slate-100 p-2.5 rounded font-mono text-[10px] break-all space-y-1 select-all">
+              <div>MONGODB_URI = &quot;mongodb+srv://&lt;username&gt;:&lt;password&gt;@cluster0.abcde.mongodb.net/visitor_db?retryWrites=true&amp;w=majority&quot;</div>
+            </div>
+            <p className="text-[10px] text-slate-500 italic">
+              Tip: Including <code>/visitor_db</code> before <code>?retryWrites=true</code> creates a dedicated database instead of saving into the default &quot;test&quot; database.
             </p>
           </div>
-
-          <div>
-            <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-              Database Name (Optional)
-            </label>
-            <input
-              type="text"
-              placeholder="visitor_db"
-              value={dbNameInput}
-              onChange={(e) => setDbNameInput(e.target.value)}
-              className="w-full px-3 py-1.5 text-xs font-mono border border-slate-300 rounded bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-500"
-            />
-          </div>
-
-          {connectionError && (
-            <div className="p-2.5 bg-red-50 border border-red-200 rounded text-xs text-red-700 font-medium">
-              {connectionError}
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={connecting || !mongoUriInput.trim()}
-            className="w-full py-2 px-4 bg-emerald-700 hover:bg-emerald-800 text-white rounded text-xs font-bold transition cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
-          >
-            {connecting ? (
-              <span>Connecting &amp; Verifying MongoDB...</span>
-            ) : (
-              <>
-                <span>🍃</span> Connect &amp; Store Only in MongoDB Live
-              </>
-            )}
-          </button>
-        </form>
-
-        {/* MongoDB Atlas Setup Checklist */}
-        <div className="border border-slate-200 rounded-lg p-3 bg-white text-xs space-y-2 text-slate-700">
-          <h4 className="font-bold text-slate-900 text-xs">
-            📍 Where to View Live Data in MongoDB Atlas:
-          </h4>
-          <ul className="list-disc pl-4 space-y-1 text-[11px] text-slate-600">
-            <li>
-              Log into <a href="https://cloud.mongodb.com" target="_blank" rel="noreferrer" className="text-blue-700 underline font-semibold">MongoDB Atlas</a> and click <strong>&quot;Browse Collections&quot;</strong>.
-            </li>
-            <li>
-              Open database <strong>&quot;{status?.databaseName || dbNameInput || 'visitor_db'}&quot;</strong>.
-            </li>
-            <li>
-              Inspect collection <strong>&quot;visitors&quot;</strong>: all visitor entries, check-in, and check-out timestamps are stored live here.
-            </li>
-            <li>
-              <strong>Atlas Network Access</strong>: Ensure IP <strong>0.0.0.0/0</strong> (Allow access from anywhere) is configured in Atlas so your cloud app can connect.
-            </li>
-          </ul>
         </div>
 
         {/* Footer */}
