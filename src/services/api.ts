@@ -1,11 +1,4 @@
-import {
-  Visitor,
-  VisitorFormData,
-  VisitorStats,
-  ReceptionUser,
-  ReceptionDesk,
-  DbStatus,
-} from '../types/index.ts';
+import { Visitor, VisitorFormData, VisitorStats, ReceptionUser, ReceptionDesk } from '../types/index.ts';
 
 const BASE_URL = '/api';
 
@@ -177,25 +170,3 @@ export function getExportCsvUrl(search?: string, status?: string): string {
   }
   return `${BASE_URL}/visitors/export?${query.toString()}`;
 }
-
-export async function getDbStatus(): Promise<DbStatus> {
-  const res = await fetch(`${BASE_URL}/db/status`);
-  const json = await res.json();
-  if (!res.ok) {
-    throw new Error(json.message || 'Failed to fetch database status');
-  }
-  return json.data;
-}
-
-export async function migrateDb(): Promise<{ migrated: number; total: number }> {
-  const res = await fetch(`${BASE_URL}/db/migrate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-  });
-  const json = await res.json();
-  if (!res.ok) {
-    throw new Error(json.message || 'Failed to migrate data to MongoDB');
-  }
-  return json.data;
-}
-

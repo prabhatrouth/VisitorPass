@@ -1,17 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import {
-  Visitor,
-  VisitorFormData,
-  VisitorStats,
-  VisitorStatus,
-  ReceptionUser,
-  DbStatus,
-} from './types/index.ts';
+import { Visitor, VisitorFormData, VisitorStats, VisitorStatus, ReceptionUser } from './types/index.ts';
 import { VisitorForm } from './components/VisitorForm.tsx';
 import { VisitorTable } from './components/VisitorTable.tsx';
 import { ReceptionLogin } from './components/ReceptionLogin.tsx';
 import { ManageDesksModal } from './components/ManageDesksModal.tsx';
-import { DatabaseStatusModal } from './components/DatabaseStatusModal.tsx';
 import {
   getVisitors,
   getVisitorStats,
@@ -21,7 +13,6 @@ import {
   checkOutVisitor,
   checkInVisitor,
   getExportCsvUrl,
-  getDbStatus,
 } from './services/api.ts';
 
 export default function App() {
@@ -41,7 +32,6 @@ export default function App() {
     currentlyInside: 0,
     checkedOutToday: 0,
   });
-  const [dbStatus, setDbStatus] = useState<DbStatus | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | VisitorStatus>('ALL');
   const [loading, setLoading] = useState<boolean>(true);
@@ -49,7 +39,6 @@ export default function App() {
   const [checkingId, setCheckingId] = useState<string | null>(null);
   const [editingVisitor, setEditingVisitor] = useState<Visitor | null>(null);
   const [showDesksModal, setShowDesksModal] = useState<boolean>(false);
-  const [showDbModal, setShowDbModal] = useState<boolean>(false);
 
   // Simple alert message for feedback
   const [alert, setAlert] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -78,14 +67,12 @@ export default function App() {
     if (!currentUser) return;
     try {
       setLoading(true);
-      const [visitorsList, statsData, dbStatusData] = await Promise.all([
+      const [visitorsList, statsData] = await Promise.all([
         getVisitors(searchQuery, statusFilter),
         getVisitorStats(),
-        getDbStatus().catch(() => null),
       ]);
       setVisitors(visitorsList);
       setStats(statsData);
-      if (dbStatusData) setDbStatus(dbStatusData);
     } catch (err: any) {
       console.error('Fetch error:', err);
       showAlert('Unable to reach server', 'error');
@@ -93,10 +80,6 @@ export default function App() {
       setLoading(false);
     }
   }, [searchQuery, statusFilter, currentUser]);
-
-  useEffect(() => {
-    getDbStatus().then(setDbStatus).catch(() => {});
-  }, []);
 
   useEffect(() => {
     if (currentUser) {
@@ -229,31 +212,6 @@ export default function App() {
           </div>
 
           <div className="text-xs text-slate-300 flex flex-wrap items-center gap-2.5">
-            {/* Database & Storage Status Button */}
-            <button
-              type="button"
-              onClick={() => setShowDbModal(true)}
-              className={`text-xs px-2.5 py-1 rounded transition cursor-pointer font-medium flex items-center gap-1.5 border ${
-                dbStatus?.isConnected
-                  ? 'bg-emerald-950/80 text-emerald-300 border-emerald-600/70 hover:bg-emerald-900'
-                  : 'bg-amber-950/80 text-amber-300 border-amber-600/70 hover:bg-amber-900'
-              }`}
-              title="Click to inspect database location and MongoDB status"
-            >
-              <span
-                className={`h-2 w-2 rounded-full ${
-                  dbStatus?.isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
-                }`}
-              ></span>
-              <span>
-                {dbStatus?.isConnected
-                  ? `MongoDB: ${dbStatus.databaseName || 'test'} (${dbStatus.mongoVisitorCount})`
-                  : 'Storage: Local File (data/visitors.json)'}
-              </span>
-            </button>
-
-            <span className="text-slate-600 hidden sm:inline">|</span>
-
             {/* Manage Multiple Desks Button */}
             <button
               type="button"
@@ -409,15 +367,6 @@ export default function App() {
         onClose={() => setShowDesksModal(false)}
         currentUser={currentUser}
         onSwitchUser={(_deskId) => {}}
-      />
-
-      {/* MongoDB Database Location & Status Modal */}
-      <DatabaseStatusModal
-        isOpen={showDbModal}
-        onClose={() => setShowDbModal(false)}
-        status={dbStatus}
-        onRefresh={fetchData}
-        onAlert={showAlert}
       />
 
       {/* Standard Human Developer Footer */}

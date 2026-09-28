@@ -23,8 +23,6 @@ class VisitorDatabase {
   private receptionists: ReceptionDesk[] = [];
   public isConnectedToMongo: boolean = false;
   public mongoDbUri: string = '';
-  public mongoDatabaseName: string = '';
-  public mongoError: string | null = null;
 
   constructor() {
     this.loadLocalData();
@@ -36,56 +34,17 @@ class VisitorDatabase {
   private async initMongoConnection(): Promise<void> {
     const uri = process.env.MONGODB_URI;
     if (!uri) {
-      this.mongoError = 'MONGODB_URI is not set in environment. Storing data in local JSON file (data/visitors.json).';
-      console.log('[VisitorPass Database] MONGODB_URI not found. Using local file storage (data/visitors.json).');
       return;
     }
 
     try {
       this.mongoDbUri = uri.replace(/\/\/([^:]+):([^@]+)@/, '//$1:****@');
-      const customDbName = process.env.MONGODB_DB_NAME;
-      await mongoose.connect(uri, {
-        ...(customDbName ? { dbName: customDbName } : {}),
-      });
-
+      await mongoose.connect(uri);
       this.isConnectedToMongo = true;
-      this.mongoDatabaseName = mongoose.connection.name || (mongoose.connection.db as any)?.databaseName || 'test';
-      this.mongoError = null;
-      console.log(`[VisitorPass Database] Successfully connected to MongoDB: database="${this.mongoDatabaseName}", URI="${this.mongoDbUri}"`);
-
-      // Auto-migrate local file visitors into MongoDB if MongoDB visitors collection is empty
-      await this.autoMigrateLocalDataIfEmpty();
+      console.log(`Connected to MongoDB successfully: ${this.mongoDbUri}`);
     } catch (err: any) {
-      this.mongoError = err.message || 'Failed to connect to MongoDB';
-      console.error('[VisitorPass Database] MongoDB connection failed, using local file storage:', this.mongoError);
+      console.error('Failed to connect to MongoDB, using local file storage:', err.message);
       this.isConnectedToMongo = false;
-    }
-  }
-
-  private async autoMigrateLocalDataIfEmpty(): Promise<void> {
-    try {
-      if (!this.isConnectedToMongo || this.visitors.length === 0) return;
-      const count = await VisitorModel.countDocuments();
-      if (count === 0) {
-        console.log(`[VisitorPass Database] MongoDB collection "visitors" is empty. Auto-migrating ${this.visitors.length} existing local records...`);
-        for (const v of this.visitors) {
-          await VisitorModel.create({
-            name: v.name,
-            mobileNumber: v.mobileNumber,
-            companyOrCollege: v.companyOrCollege,
-            personToMeet: v.personToMeet,
-            purposeOfVisit: v.purposeOfVisit,
-            dateTime: v.dateTime || new Date().toISOString(),
-            status: v.status || 'CHECKED_IN',
-            checkInTime: v.checkInTime || v.dateTime || new Date().toISOString(),
-            checkOutTime: v.checkOutTime || null,
-            registeredByDesk: v.registeredByDesk || 'admin',
-          });
-        }
-        console.log(`[VisitorPass Database] Auto-migration successfully stored ${this.visitors.length} visitors in MongoDB!`);
-      }
-    } catch (err: any) {
-      console.error('[VisitorPass Database] Auto-migration error:', err.message);
     }
   }
 
@@ -572,73 +531,6 @@ class VisitorDatabase {
       currentlyInside,
       checkedOutToday,
     };
-  }
-
-  public async getDbStatus(): Promise<{
-    isConnected: boolean;
-    storageType: string;
-    databaseName: string | null;
-    collectionName: string;
-    maskedUri: string | null;
-    mongoVisitorCount: number;
-    localVisitorCount: number;
-    error: string | null;
-  }> {
-    let mongoCount = 0;
-    let dbName: string | null = null;
-    if (this.isConnectedToMongo) {
-      try {
-        mongoCount = await VisitorModel.countDocuments();
-        dbName = this.mongoDatabaseName || mongoose.connection.name || (mongoose.connection.db as any)?.databaseName || null;
-      } catch {
-        // ignore
-      }
-    }
-
-    return {
-      isConnected: this.isConnectedToMongo,
-      storageType: this.isConnectedToMongo ? 'MongoDB' : 'Local File Storage (data/visitors.json)',
-      databaseName: dbName,
-      collectionName: 'visitors',
-      maskedUri: this.mongoDbUri || null,
-      mongoVisitorCount: mongoCount,
-      localVisitorCount: this.visitors.length,
-      error: this.mongoError || null,
-    };
-  }
-
-  public async migrateLocalVisitorsToMongo(): Promise<{ migrated: number; total: number }> {
-    if (!this.isConnectedToMongo) {
-      throw new Error(
-        this.mongoError || 'MongoDB is not connected. Please verify your MONGODB_URI configuration.'
-      );
-    }
-
-    let migrated = 0;
-    for (const v of this.visitors) {
-      const exists = await VisitorModel.findOne({
-        mobileNumber: v.mobileNumber,
-        name: v.name,
-      });
-
-      if (!exists) {
-        await VisitorModel.create({
-          name: v.name,
-          mobileNumber: v.mobileNumber,
-          companyOrCollege: v.companyOrCollege,
-          personToMeet: v.personToMeet,
-          purposeOfVisit: v.purposeOfVisit,
-          dateTime: v.dateTime || new Date().toISOString(),
-          status: v.status || 'CHECKED_IN',
-          checkInTime: v.checkInTime || v.dateTime || new Date().toISOString(),
-          checkOutTime: v.checkOutTime || null,
-          registeredByDesk: v.registeredByDesk || 'admin',
-        });
-        migrated++;
-      }
-    }
-
-    return { migrated, total: this.visitors.length };
   }
 }
 

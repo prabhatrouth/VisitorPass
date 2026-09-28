@@ -383,27 +383,3 @@ apiRouter.delete('/visitors/:id', async (req: Request, res: Response) => {
     res.status(500).json({ success: false, message: 'Failed to delete visitor' });
   }
 });
-
-// GET /api/db/status - Storage and MongoDB status diagnostic
-apiRouter.get('/db/status', async (_req: Request, res: Response) => {
-  try {
-    const status = await db.getDbStatus();
-    res.json({ success: true, data: status });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message || 'Failed to check DB status' });
-  }
-});
-
-// POST /api/db/migrate - Sync/migrate local visitors to MongoDB
-apiRouter.post('/db/migrate', async (_req: Request, res: Response) => {
-  try {
-    const result = await db.migrateLocalVisitorsToMongo();
-    res.json({
-      success: true,
-      message: `Successfully migrated ${result.migrated} records into MongoDB collection "visitors" (${result.total} evaluated).`,
-      data: result,
-    });
-  } catch (error: any) {
-    res.status(400).json({ success: false, message: error.message || 'Failed to migrate data' });
-  }
-});
