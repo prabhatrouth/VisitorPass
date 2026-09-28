@@ -1,0 +1,6 @@
+{
+  "name": "VisitorPass - Employee Visitor Registration System",
+  "description": "Employee visitor registration web application for company reception staff.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

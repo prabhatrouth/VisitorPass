@@ -1,0 +1,10 @@
+[
+  {
+    "id": "desk-main-1790582816627",
+    "deskId": "admin",
+    "password": "admin123",
+    "stationName": "Main Reception Desk",
+    "createdAt": "2026-09-28T08:06:56.627Z",
+    "isPrimary": true
+  }
+]
