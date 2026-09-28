@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { apiRouter } from './server/routes.ts';
@@ -8,7 +9,6 @@ dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const isProd = process.env.NODE_ENV === 'production';
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 async function startServer() {
@@ -21,20 +21,31 @@ async function startServer() {
   // API Routes
   app.use('/api', apiRouter);
 
-  // Vite middleware in dev, static files in production
-  if (!isProd) {
+  const distPath = path.resolve(__dirname, 'dist');
+  const indexPath = path.join(distPath, 'index.html');
+  const hasDist = fs.existsSync(indexPath);
+
+  // If built dist files exist, serve static assets
+  if (hasDist) {
+    console.log(`[VisitorPass Server] Serving production build from ${distPath}`);
+    app.use(express.static(distPath));
+    app.get('*', (_req, res, next) => {
+      res.sendFile(indexPath, (err) => {
+        if (err) {
+          next(err);
+        }
+      });
+    });
+  } else {
+    // If dist/index.html is missing (e.g. Render running 'npm run dev' or build was not run),
+    // seamlessly mount Vite middleware so the application never crashes with ENOENT.
+    console.log('[VisitorPass Server] dist/index.html not found, mounting Vite middleware mode...');
     const { createServer } = await import('vite');
     const vite = await createServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
-    const distPath = path.resolve(__dirname, 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
   }
 
   app.listen(PORT, '0.0.0.0', () => {
