@@ -1,115 +1,63 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import mongoose from 'mongoose';
 import { Visitor, VisitorFormData, VisitorStats, ReceptionDesk } from './types.js';
 import { VisitorModel } from './models/Visitor.js';
 import { ReceptionDeskModel } from './models/ReceptionDesk.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const DATA_DIR = path.resolve(__dirname, '../data');
-const DATA_FILE = path.join(DATA_DIR, 'visitors.json');
-const RECEPTION_FILE = path.join(DATA_DIR, 'receptionists.json');
-
-function ensureDataDir(): void {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-}
+const NOT_CONNECTED_MSG =
+  'STORE ONLY IN MONGODB LIVE DATA: MongoDB is not connected yet. Connect your MongoDB Atlas connection string to save all visitor logs directly to live MongoDB.';
 
 class VisitorDatabase {
-  private visitors: Visitor[] = [];
-  private receptionists: ReceptionDesk[] = [];
   public isConnectedToMongo: boolean = false;
   public mongoDbUri: string = '';
+  public mongoDatabaseName: string = '';
+  public mongoError: string | null = null;
 
   constructor() {
-    this.loadLocalData();
-    this.initMongoConnection().then(() => {
-      this.ensurePrimaryReceptionDesk();
-    });
+    this.initMongoConnection();
   }
 
-  private async initMongoConnection(): Promise<void> {
+  public async initMongoConnection(): Promise<void> {
     const uri = process.env.MONGODB_URI;
-    if (!uri) {
+    if (!uri || !uri.trim()) {
+      this.isConnectedToMongo = false;
+      this.mongoError = NOT_CONNECTED_MSG;
+      console.log(`[VisitorPass Database] ${NOT_CONNECTED_MSG}`);
       return;
     }
 
     try {
-      this.mongoDbUri = uri.replace(/\/\/([^:]+):([^@]+)@/, '//$1:****@');
-      await mongoose.connect(uri);
+      if (mongoose.connection.readyState !== 0) {
+        await mongoose.disconnect();
+      }
+
+      const masked = uri.replace(/\/\/([^:]+):([^@]+)@/, '//$1:****@');
+      this.mongoDbUri = masked;
+
+      const customDbName = process.env.MONGODB_DB_NAME;
+      await mongoose.connect(uri.trim(), {
+        serverSelectionTimeoutMS: 8000,
+        ...(customDbName ? { dbName: customDbName.trim() } : {}),
+      });
+
+      // Verify connection ping
+      await mongoose.connection.db?.admin().ping();
+
       this.isConnectedToMongo = true;
-      console.log(`Connected to MongoDB successfully: ${this.mongoDbUri}`);
+      this.mongoDatabaseName = mongoose.connection.name || (mongoose.connection.db as any)?.databaseName || 'visitor_db';
+      this.mongoError = null;
+
+      console.log(`[VisitorPass Database] Connected to LIVE MongoDB database: "${this.mongoDatabaseName}" (${masked})`);
+      await this.ensurePrimaryReceptionDesk();
     } catch (err: any) {
-      console.error('Failed to connect to MongoDB, using local file storage:', err.message);
       this.isConnectedToMongo = false;
+      this.mongoError = err.message || NOT_CONNECTED_MSG;
+      console.error('[VisitorPass Database] MongoDB connection failed:', err.message);
     }
   }
 
-  private loadLocalData(): void {
-    ensureDataDir();
-    // Visitors
-    try {
-      if (fs.existsSync(DATA_FILE)) {
-        const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          // Normalize check-in / check-out status for existing records
-          this.visitors = parsed.map((v: any) => ({
-            ...v,
-            status: v.status || (v.checkOutTime ? 'CHECKED_OUT' : 'CHECKED_IN'),
-            checkInTime: v.checkInTime || v.dateTime || new Date().toISOString(),
-            checkOutTime: v.checkOutTime || null,
-          }));
-          this.saveVisitors();
-        } else {
-          this.visitors = [];
-          this.saveVisitors();
-        }
-      } else {
-        this.visitors = [];
-        this.saveVisitors();
-      }
-    } catch {
-      this.visitors = [];
-      this.saveVisitors();
-    }
-
-    // Receptionists
-    try {
-      if (fs.existsSync(RECEPTION_FILE)) {
-        const raw = fs.readFileSync(RECEPTION_FILE, 'utf-8');
-        this.receptionists = JSON.parse(raw);
-        if (!Array.isArray(this.receptionists)) {
-          this.receptionists = [];
-        }
-      } else {
-        this.receptionists = [];
-      }
-    } catch {
-      this.receptionists = [];
-    }
-
-    this.ensurePrimaryReceptionDesk();
-  }
-
-  private saveVisitors(): void {
-    ensureDataDir();
-    try {
-      fs.writeFileSync(DATA_FILE, JSON.stringify(this.visitors, null, 2), 'utf-8');
-    } catch (err) {
-      console.error('Failed to write visitors.json:', err);
-    }
-  }
-
-  private saveReceptionists(): void {
-    ensureDataDir();
-    try {
-      fs.writeFileSync(RECEPTION_FILE, JSON.stringify(this.receptionists, null, 2), 'utf-8');
-    } catch (err) {
-      console.error('Failed to write receptionists.json:', err);
+  private ensureConnected(): void {
+    if (!this.isConnectedToMongo) {
+      throw new Error(NOT_CONNECTED_MSG);
     }
   }
 
@@ -124,38 +72,59 @@ class VisitorDatabase {
           await ReceptionDeskModel.create({
             deskId: envDeskId,
             password: envPassword,
-            stationName: 'Main Reception Desk',
+            stationName: 'Main Entrance Reception Desk',
             isPrimary: true,
           });
+          console.log(`[VisitorPass Database] Primary reception desk "${envDeskId}" initialized in MongoDB.`);
         }
-      } catch (err) {
-        console.error('Error ensuring primary desk in Mongo:', err);
+      } catch (err: any) {
+        console.error('Error ensuring primary desk in MongoDB:', err.message);
       }
-      return;
-    }
-
-    const existingIdx = this.receptionists.findIndex(
-      (r) => r.deskId.toLowerCase() === envDeskId
-    );
-
-    if (existingIdx === -1) {
-      this.receptionists.unshift({
-        id: `desk-main-${Date.now()}`,
-        deskId: envDeskId,
-        password: envPassword,
-        stationName: 'Main Reception Desk',
-        createdAt: new Date().toISOString(),
-        isPrimary: true,
-      });
-      this.saveReceptionists();
     }
   }
 
-  // --- RECEPTION DESKS MANAGEMENT ---
+  // --- RECEPTION AUTHENTICATION & MULTI-DESK MANAGEMENT ---
 
-  public async getReceptionDesks(): Promise<Omit<ReceptionDesk, 'password'>[]> {
-    await this.ensurePrimaryReceptionDesk();
+  public async authenticateReceptionDesk(
+    deskId: string,
+    password: string
+  ): Promise<Omit<ReceptionDesk, 'password'> | null> {
+    const normalizedDeskId = deskId.trim().toLowerCase();
+    const plainPassword = password.trim();
 
+    // Check in live MongoDB if connected
+    if (this.isConnectedToMongo) {
+      const deskDoc = await ReceptionDeskModel.findOne({ deskId: normalizedDeskId });
+      if (deskDoc && deskDoc.password === plainPassword) {
+        const json = deskDoc.toJSON();
+        return {
+          id: json.id,
+          deskId: json.deskId,
+          stationName: json.stationName,
+          createdAt: json.createdAt,
+          isPrimary: !!json.isPrimary,
+        };
+      }
+    }
+
+    // Fallback authentication for primary admin configured via .env credentials
+    const envDeskId = (process.env.RECEPTION_ID || 'admin').trim().toLowerCase();
+    const envPassword = (process.env.RECEPTION_PASSWORD || 'admin123').trim();
+
+    if (normalizedDeskId === envDeskId && plainPassword === envPassword) {
+      return {
+        id: 'admin-primary',
+        deskId: envDeskId,
+        stationName: 'Main Entrance Reception Desk',
+        createdAt: new Date().toISOString(),
+        isPrimary: true,
+      };
+    }
+
+    return null;
+  }
+
+  public async getAllReceptionDesks(): Promise<Omit<ReceptionDesk, 'password'>[]> {
     if (this.isConnectedToMongo) {
       const docs = await ReceptionDeskModel.find().sort({ createdAt: 1 });
       return docs.map((d) => {
@@ -165,33 +134,22 @@ class VisitorDatabase {
           deskId: json.deskId,
           stationName: json.stationName,
           createdAt: json.createdAt,
-          isPrimary: json.isPrimary,
+          isPrimary: !!json.isPrimary,
         };
       });
     }
 
-    return this.receptionists.map((r) => ({
-      id: r.id,
-      deskId: r.deskId,
-      stationName: r.stationName,
-      createdAt: r.createdAt,
-      isPrimary: r.isPrimary,
-    }));
-  }
-
-  public async findReceptionDeskForAuth(deskId: string): Promise<ReceptionDesk | null> {
-    await this.ensurePrimaryReceptionDesk();
-    const normalized = deskId.trim().toLowerCase();
-
-    if (this.isConnectedToMongo) {
-      const doc = await ReceptionDeskModel.findOne({ deskId: normalized });
-      return doc ? (doc.toJSON() as ReceptionDesk) : null;
-    }
-
-    const found = this.receptionists.find(
-      (r) => r.deskId.toLowerCase() === normalized
-    );
-    return found || null;
+    // Default primary desk from env
+    const envDeskId = (process.env.RECEPTION_ID || 'admin').trim().toLowerCase();
+    return [
+      {
+        id: 'admin-primary',
+        deskId: envDeskId,
+        stationName: 'Main Entrance Reception Desk',
+        createdAt: new Date().toISOString(),
+        isPrimary: true,
+      },
+    ];
   }
 
   public async createReceptionDesk(data: {
@@ -199,169 +157,88 @@ class VisitorDatabase {
     password: string;
     stationName: string;
   }): Promise<Omit<ReceptionDesk, 'password'>> {
+    this.ensureConnected();
+
     const normalizedDeskId = data.deskId.trim().toLowerCase();
     const stationName = data.stationName.trim() || `Reception ${normalizedDeskId.toUpperCase()}`;
     const password = data.password.trim();
 
-    if (this.isConnectedToMongo) {
-      const exists = await ReceptionDeskModel.findOne({ deskId: normalizedDeskId });
-      if (exists) {
-        throw new Error(`Desk ID "${normalizedDeskId}" already exists. Please choose a different ID.`);
-      }
-      const doc = await ReceptionDeskModel.create({
-        deskId: normalizedDeskId,
-        password,
-        stationName,
-        isPrimary: false,
-      });
-      const json = doc.toJSON();
-      return {
-        id: json.id,
-        deskId: json.deskId,
-        stationName: json.stationName,
-        createdAt: json.createdAt,
-        isPrimary: false,
-      };
-    }
-
-    const exists = this.receptionists.some(
-      (r) => r.deskId.toLowerCase() === normalizedDeskId
-    );
+    const exists = await ReceptionDeskModel.findOne({ deskId: normalizedDeskId });
     if (exists) {
       throw new Error(`Desk ID "${normalizedDeskId}" already exists. Please choose a different ID.`);
     }
 
-    const newDesk: ReceptionDesk = {
-      id: `desk-${Date.now()}`,
+    const doc = await ReceptionDeskModel.create({
       deskId: normalizedDeskId,
       password,
       stationName,
-      createdAt: new Date().toISOString(),
       isPrimary: false,
-    };
-
-    this.receptionists.push(newDesk);
-    this.saveReceptionists();
-
+    });
+    const json = doc.toJSON();
     return {
-      id: newDesk.id,
-      deskId: newDesk.deskId,
-      stationName: newDesk.stationName,
-      createdAt: newDesk.createdAt,
+      id: json.id,
+      deskId: json.deskId,
+      stationName: json.stationName,
+      createdAt: json.createdAt,
       isPrimary: false,
     };
   }
 
   public async deleteReceptionDesk(id: string): Promise<boolean> {
-    if (this.isConnectedToMongo) {
-      const count = await ReceptionDeskModel.countDocuments();
-      if (count <= 1) {
-        throw new Error('Cannot delete the only remaining reception desk.');
-      }
-      const desk = await ReceptionDeskModel.findById(id);
-      if (desk?.isPrimary) {
-        throw new Error('Primary reception desk configured in .env cannot be deleted.');
-      }
-      const res = await ReceptionDeskModel.findByIdAndDelete(id);
-      return !!res;
-    }
+    this.ensureConnected();
 
-    if (this.receptionists.length <= 1) {
+    const count = await ReceptionDeskModel.countDocuments();
+    if (count <= 1) {
       throw new Error('Cannot delete the only remaining reception desk.');
     }
-
-    const desk = this.receptionists.find((r) => r.id === id);
+    const desk = await ReceptionDeskModel.findById(id);
     if (desk?.isPrimary) {
-      throw new Error('Primary reception desk configured in .env cannot be deleted.');
+      throw new Error('Primary reception desk cannot be deleted.');
     }
-
-    const initialLen = this.receptionists.length;
-    this.receptionists = this.receptionists.filter((r) => r.id !== id);
-    if (this.receptionists.length !== initialLen) {
-      this.saveReceptionists();
-      return true;
-    }
-    return false;
+    const res = await ReceptionDeskModel.findByIdAndDelete(id);
+    return !!res;
   }
 
-  // --- VISITORS MANAGEMENT & CHECK-IN / CHECK-OUT ---
+  // --- VISITORS MANAGEMENT: STORED ONLY IN MONGODB LIVE DATA ---
 
   public async getAll(search?: string, statusFilter?: string): Promise<Visitor[]> {
-    if (this.isConnectedToMongo) {
-      const query: any = {};
-      if (search && search.trim()) {
-        const regex = new RegExp(search.trim(), 'i');
-        query.$or = [
-          { name: regex },
-          { mobileNumber: regex },
-          { companyOrCollege: regex },
-          { personToMeet: regex },
-        ];
-      }
-      if (statusFilter && statusFilter !== 'ALL') {
-        query.status = statusFilter;
-      }
-      const docs = await VisitorModel.find(query).sort({ checkInTime: -1 });
-      return docs.map((d) => d.toJSON() as Visitor);
+    if (!this.isConnectedToMongo) {
+      return [];
     }
 
-    let results = [...this.visitors];
+    const query: any = {};
     if (search && search.trim()) {
-      const q = search.trim().toLowerCase();
-      results = results.filter(
-        (v) =>
-          v.name.toLowerCase().includes(q) ||
-          v.mobileNumber.toLowerCase().includes(q) ||
-          v.companyOrCollege.toLowerCase().includes(q) ||
-          v.personToMeet.toLowerCase().includes(q)
-      );
+      const regex = new RegExp(search.trim(), 'i');
+      query.$or = [
+        { name: regex },
+        { mobileNumber: regex },
+        { companyOrCollege: regex },
+        { personToMeet: regex },
+      ];
     }
-
     if (statusFilter && statusFilter !== 'ALL') {
-      results = results.filter((v) => v.status === statusFilter);
+      query.status = statusFilter;
     }
-
-    results.sort(
-      (a, b) =>
-        new Date(b.checkInTime || b.dateTime).getTime() -
-        new Date(a.checkInTime || a.dateTime).getTime()
-    );
-    return results;
+    const docs = await VisitorModel.find(query).sort({ checkInTime: -1 });
+    return docs.map((d) => d.toJSON() as Visitor);
   }
 
   public async getById(id: string): Promise<Visitor | null> {
-    if (this.isConnectedToMongo) {
-      const doc = await VisitorModel.findById(id);
-      return doc ? (doc.toJSON() as Visitor) : null;
-    }
-    return this.visitors.find((v) => v.id === id) || null;
+    this.ensureConnected();
+    const doc = await VisitorModel.findById(id);
+    return doc ? (doc.toJSON() as Visitor) : null;
   }
 
   public async create(data: VisitorFormData): Promise<Visitor> {
+    this.ensureConnected();
+
     const now = new Date().toISOString();
     const dateTime = data.dateTime || now;
     const checkInTime = data.checkInTime || dateTime;
     const status = data.status || 'CHECKED_IN';
     const checkOutTime = data.checkOutTime || null;
 
-    if (this.isConnectedToMongo) {
-      const doc = await VisitorModel.create({
-        name: data.name.trim(),
-        mobileNumber: data.mobileNumber.trim(),
-        companyOrCollege: data.companyOrCollege.trim(),
-        personToMeet: data.personToMeet.trim(),
-        purposeOfVisit: data.purposeOfVisit.trim(),
-        dateTime,
-        status,
-        checkInTime,
-        checkOutTime,
-        registeredByDesk: data.registeredByDesk || 'admin',
-      });
-      return doc.toJSON() as Visitor;
-    }
-
-    const newVisitor: Visitor = {
-      id: `vis-${Date.now()}`,
+    const doc = await VisitorModel.create({
       name: data.name.trim(),
       mobileNumber: data.mobileNumber.trim(),
       companyOrCollege: data.companyOrCollege.trim(),
@@ -372,12 +249,9 @@ class VisitorDatabase {
       checkInTime,
       checkOutTime,
       registeredByDesk: data.registeredByDesk || 'admin',
-      createdAt: now,
-    };
+    });
 
-    this.visitors.unshift(newVisitor);
-    this.saveVisitors();
-    return newVisitor;
+    return doc.toJSON() as Visitor;
   }
 
   public async checkOut(
@@ -385,132 +259,74 @@ class VisitorDatabase {
     deskId?: string,
     checkOutTime?: string
   ): Promise<Visitor | null> {
+    this.ensureConnected();
+
     const outTime = checkOutTime || new Date().toISOString();
-
-    if (this.isConnectedToMongo) {
-      const doc = await VisitorModel.findByIdAndUpdate(
-        id,
-        {
-          status: 'CHECKED_OUT',
-          checkOutTime: outTime,
-          ...(deskId && { checkedOutByDesk: deskId }),
-        },
-        { new: true }
-      );
-      return doc ? (doc.toJSON() as Visitor) : null;
-    }
-
-    const idx = this.visitors.findIndex((v) => v.id === id);
-    if (idx === -1) return null;
-
-    this.visitors[idx] = {
-      ...this.visitors[idx],
-      status: 'CHECKED_OUT',
-      checkOutTime: outTime,
-      ...(deskId && { checkedOutByDesk: deskId }),
-      updatedAt: new Date().toISOString(),
-    };
-
-    this.saveVisitors();
-    return this.visitors[idx];
+    const doc = await VisitorModel.findByIdAndUpdate(
+      id,
+      {
+        status: 'CHECKED_OUT',
+        checkOutTime: outTime,
+        ...(deskId && { checkedOutByDesk: deskId }),
+      },
+      { new: true }
+    );
+    return doc ? (doc.toJSON() as Visitor) : null;
   }
 
-  public async checkIn(
-    id: string,
-    deskId?: string,
-    checkInTime?: string
-  ): Promise<Visitor | null> {
+  public async checkIn(id: string, checkInTime?: string): Promise<Visitor | null> {
+    this.ensureConnected();
+
     const inTime = checkInTime || new Date().toISOString();
-
-    if (this.isConnectedToMongo) {
-      const doc = await VisitorModel.findByIdAndUpdate(
-        id,
-        {
-          status: 'CHECKED_IN',
-          checkInTime: inTime,
-          checkOutTime: null,
-          ...(deskId && { registeredByDesk: deskId }),
-        },
-        { new: true }
-      );
-      return doc ? (doc.toJSON() as Visitor) : null;
-    }
-
-    const idx = this.visitors.findIndex((v) => v.id === id);
-    if (idx === -1) return null;
-
-    this.visitors[idx] = {
-      ...this.visitors[idx],
-      status: 'CHECKED_IN',
-      checkInTime: inTime,
-      checkOutTime: null,
-      ...(deskId && { registeredByDesk: deskId }),
-      updatedAt: new Date().toISOString(),
-    };
-
-    this.saveVisitors();
-    return this.visitors[idx];
+    const doc = await VisitorModel.findByIdAndUpdate(
+      id,
+      {
+        status: 'CHECKED_IN',
+        checkInTime: inTime,
+        checkOutTime: null,
+      },
+      { new: true }
+    );
+    return doc ? (doc.toJSON() as Visitor) : null;
   }
 
   public async update(id: string, data: Partial<VisitorFormData>): Promise<Visitor | null> {
-    if (this.isConnectedToMongo) {
-      const doc = await VisitorModel.findByIdAndUpdate(
-        id,
-        {
-          ...(data.name && { name: data.name.trim() }),
-          ...(data.mobileNumber && { mobileNumber: data.mobileNumber.trim() }),
-          ...(data.companyOrCollege && { companyOrCollege: data.companyOrCollege.trim() }),
-          ...(data.personToMeet && { personToMeet: data.personToMeet.trim() }),
-          ...(data.purposeOfVisit && { purposeOfVisit: data.purposeOfVisit.trim() }),
-          ...(data.dateTime && { dateTime: data.dateTime }),
-          ...(data.status && { status: data.status }),
-          ...(data.checkInTime && { checkInTime: data.checkInTime }),
-          ...(data.checkOutTime !== undefined && { checkOutTime: data.checkOutTime }),
-        },
-        { new: true }
-      );
-      return doc ? (doc.toJSON() as Visitor) : null;
-    }
+    this.ensureConnected();
 
-    const idx = this.visitors.findIndex((v) => v.id === id);
-    if (idx === -1) return null;
-
-    const existing = this.visitors[idx];
-    const updated: Visitor = {
-      ...existing,
-      ...(data.name && { name: data.name.trim() }),
-      ...(data.mobileNumber && { mobileNumber: data.mobileNumber.trim() }),
-      ...(data.companyOrCollege && { companyOrCollege: data.companyOrCollege.trim() }),
-      ...(data.personToMeet && { personToMeet: data.personToMeet.trim() }),
-      ...(data.purposeOfVisit && { purposeOfVisit: data.purposeOfVisit.trim() }),
-      ...(data.dateTime && { dateTime: data.dateTime }),
-      ...(data.status && { status: data.status }),
-      ...(data.checkInTime && { checkInTime: data.checkInTime }),
-      ...(data.checkOutTime !== undefined && { checkOutTime: data.checkOutTime }),
-      updatedAt: new Date().toISOString(),
-    };
-
-    this.visitors[idx] = updated;
-    this.saveVisitors();
-    return updated;
+    const doc = await VisitorModel.findByIdAndUpdate(
+      id,
+      {
+        ...(data.name && { name: data.name.trim() }),
+        ...(data.mobileNumber && { mobileNumber: data.mobileNumber.trim() }),
+        ...(data.companyOrCollege && { companyOrCollege: data.companyOrCollege.trim() }),
+        ...(data.personToMeet && { personToMeet: data.personToMeet.trim() }),
+        ...(data.purposeOfVisit && { purposeOfVisit: data.purposeOfVisit.trim() }),
+        ...(data.dateTime && { dateTime: data.dateTime }),
+        ...(data.status && { status: data.status }),
+        ...(data.checkInTime && { checkInTime: data.checkInTime }),
+        ...(data.checkOutTime !== undefined && { checkOutTime: data.checkOutTime }),
+      },
+      { new: true }
+    );
+    return doc ? (doc.toJSON() as Visitor) : null;
   }
 
   public async delete(id: string): Promise<boolean> {
-    if (this.isConnectedToMongo) {
-      const res = await VisitorModel.findByIdAndDelete(id);
-      return !!res;
-    }
-
-    const initialLen = this.visitors.length;
-    this.visitors = this.visitors.filter((v) => v.id !== id);
-    if (this.visitors.length !== initialLen) {
-      this.saveVisitors();
-      return true;
-    }
-    return false;
+    this.ensureConnected();
+    const res = await VisitorModel.findByIdAndDelete(id);
+    return !!res;
   }
 
   public async getStats(): Promise<VisitorStats> {
+    if (!this.isConnectedToMongo) {
+      return {
+        todayTotal: 0,
+        totalVisitors: 0,
+        currentlyInside: 0,
+        checkedOutToday: 0,
+      };
+    }
+
     const allVisitors = await this.getAll();
     const todayStr = new Date().toISOString().slice(0, 10);
 

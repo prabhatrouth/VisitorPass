@@ -286,9 +286,9 @@ apiRouter.post('/visitors', async (req: Request, res: Response) => {
       message: `Visitor "${newVisitor.name}" checked in successfully`,
       data: newVisitor,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error registering visitor:', error);
-    res.status(500).json({ success: false, message: 'Failed to register visitor' });
+    res.status(500).json({ success: false, message: error.message || 'Failed to register visitor' });
   }
 });
 
@@ -326,7 +326,7 @@ apiRouter.post('/visitors/:id/checkin', async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: 'Visitor not found' });
     }
 
-    const updated = await db.checkIn(id, deskId, checkInTime);
+    const updated = await db.checkIn(id, checkInTime);
     res.json({
       success: true,
       message: `Visitor "${existing.name}" checked in successfully`,
@@ -363,9 +363,9 @@ apiRouter.put('/visitors/:id', async (req: Request, res: Response) => {
       message: 'Visitor details updated successfully',
       data: updated,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error updating visitor:', error);
-    res.status(500).json({ success: false, message: 'Failed to update visitor details' });
+    res.status(500).json({ success: false, message: error.message || 'Failed to update visitor details' });
   }
 });
 
@@ -378,8 +378,8 @@ apiRouter.delete('/visitors/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: 'Visitor not found' });
     }
     res.json({ success: true, message: 'Visitor record deleted successfully' });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error deleting visitor:', error);
-    res.status(500).json({ success: false, message: 'Failed to delete visitor' });
+    res.status(500).json({ success: false, message: error.message || 'Failed to delete visitor' });
   }
 });

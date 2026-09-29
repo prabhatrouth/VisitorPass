@@ -1,4 +1,10 @@
-import { Visitor, VisitorFormData, VisitorStats, ReceptionUser, ReceptionDesk } from '../types/index.ts';
+import {
+  Visitor,
+  VisitorFormData,
+  VisitorStats,
+  ReceptionUser,
+  ReceptionDesk,
+} from '../types/index.ts';
 
 const BASE_URL = '/api';
 
@@ -170,3 +176,5 @@ export function getExportCsvUrl(search?: string, status?: string): string {
   }
   return `${BASE_URL}/visitors/export?${query.toString()}`;
 }
+
+
