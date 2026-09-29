@@ -51,3 +51,14 @@ export interface ReceptionDesk {
   createdAt: string;
   isPrimary?: boolean;
 }
+
+export interface DbStatus {
+  isConnected: boolean;
+  storageType: string;
+  databaseName: string | null;
+  collectionName: string;
+  maskedUri: string | null;
+  mongoVisitorCount: number;
+  localVisitorCount: number;
+  error: string | null;
+}

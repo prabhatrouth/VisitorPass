@@ -4,6 +4,7 @@ import {
   VisitorStats,
   ReceptionUser,
   ReceptionDesk,
+  DbStatus,
 } from '../types/index.ts';
 
 const BASE_URL = '/api';
@@ -175,6 +176,52 @@ export function getExportCsvUrl(search?: string, status?: string): string {
     query.append('status', status.trim());
   }
   return `${BASE_URL}/visitors/export?${query.toString()}`;
+}
+
+export async function getDbStatus(): Promise<DbStatus> {
+  const res = await fetch(`${BASE_URL}/db/status`);
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(json.message || 'Failed to fetch database status');
+  }
+  return json.data;
+}
+
+export async function migrateDb(): Promise<{ migrated: number; total: number }> {
+  const res = await fetch(`${BASE_URL}/db/migrate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(json.message || 'Failed to migrate data to MongoDB');
+  }
+  return json.data;
+}
+
+export async function connectDb(uri: string, dbName?: string): Promise<{ message: string; data: DbStatus }> {
+  const res = await fetch(`${BASE_URL}/db/connect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uri, dbName }),
+  });
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(json.message || 'Failed to connect to MongoDB');
+  }
+  return json;
+}
+
+export async function disconnectDb(): Promise<DbStatus> {
+  const res = await fetch(`${BASE_URL}/db/disconnect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(json.message || 'Failed to disconnect from MongoDB');
+  }
+  return json.data;
 }
 
 
