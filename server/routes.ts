@@ -286,9 +286,9 @@ apiRouter.post('/visitors', async (req: Request, res: Response) => {
       message: `Visitor "${newVisitor.name}" checked in successfully`,
       data: newVisitor,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error registering visitor:', error);
-    res.status(500).json({ success: false, message: 'Failed to register visitor' });
+    res.status(500).json({ success: false, message: error.message || 'Failed to register visitor' });
   }
 });
 
@@ -326,7 +326,7 @@ apiRouter.post('/visitors/:id/checkin', async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: 'Visitor not found' });
     }
 
-    const updated = await db.checkIn(id, deskId, checkInTime);
+    const updated = await db.checkIn(id, checkInTime);
     res.json({
       success: true,
       message: `Visitor "${existing.name}" checked in successfully`,
@@ -363,9 +363,9 @@ apiRouter.put('/visitors/:id', async (req: Request, res: Response) => {
       message: 'Visitor details updated successfully',
       data: updated,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error updating visitor:', error);
-    res.status(500).json({ success: false, message: 'Failed to update visitor details' });
+    res.status(500).json({ success: false, message: error.message || 'Failed to update visitor details' });
   }
 });
 
@@ -378,72 +378,8 @@ apiRouter.delete('/visitors/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: 'Visitor not found' });
     }
     res.json({ success: true, message: 'Visitor record deleted successfully' });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error deleting visitor:', error);
-    res.status(500).json({ success: false, message: 'Failed to delete visitor' });
-  }
-});
-
-// GET /api/db/status - Storage and MongoDB status diagnostic
-apiRouter.get('/db/status', async (_req: Request, res: Response) => {
-  try {
-    const status = await db.getDbStatus();
-    res.json({ success: true, data: status });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message || 'Failed to check DB status' });
-  }
-});
-
-// POST /api/db/migrate - Sync/migrate local visitors to MongoDB
-apiRouter.post('/db/migrate', async (_req: Request, res: Response) => {
-  try {
-    const result = await db.migrateLocalVisitorsToMongo();
-    res.json({
-      success: true,
-      message: `Successfully migrated ${result.migrated} records into MongoDB collection "visitors" (${result.total} evaluated).`,
-      data: result,
-    });
-  } catch (error: any) {
-    res.status(400).json({ success: false, message: error.message || 'Failed to migrate data' });
-  }
-});
-
-// POST /api/db/connect - Connect to live MongoDB
-apiRouter.post('/db/connect', async (req: Request, res: Response) => {
-  try {
-    const { uri, dbName } = req.body;
-    if (!uri || !uri.trim()) {
-      return res.status(400).json({ success: false, message: 'MongoDB connection URI is required.' });
-    }
-
-    const connectResult = await db.connectMongo(uri, dbName, true);
-    const status = await db.getDbStatus();
-
-    res.json({
-      success: true,
-      message: `Successfully connected to live MongoDB database "${connectResult.databaseName}"! All data is now stored exclusively in MongoDB.`,
-      data: status,
-    });
-  } catch (error: any) {
-    console.error('Error connecting to MongoDB:', error);
-    res.status(400).json({
-      success: false,
-      message: error.message || 'Failed to connect to MongoDB',
-    });
-  }
-});
-
-// POST /api/db/disconnect - Disconnect from MongoDB
-apiRouter.post('/db/disconnect', async (_req: Request, res: Response) => {
-  try {
-    await db.disconnectMongo();
-    const status = await db.getDbStatus();
-    res.json({
-      success: true,
-      message: 'MongoDB disconnected.',
-      data: status,
-    });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message || 'Failed to disconnect' });
+    res.status(500).json({ success: false, message: error.message || 'Failed to delete visitor' });
   }
 });
